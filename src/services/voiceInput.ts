@@ -21,7 +21,16 @@ export async function startListening(
   onResult: (text: string) => void,
   onError: (error: string) => void
 ): Promise<void> {
-  if (isListening) return;
+  // Force-unload any stale recording from a previous session. cancelListening fires
+  // stopAndUnloadAsync asynchronously, so the native audio session may still be active
+  // when a new session starts — causing an "already recording" error from Expo Audio.
+  if (recording) {
+    await recording.stopAndUnloadAsync().catch(() => {});
+    recording = null;
+  }
+  isListening = false;
+  onResultCallback = null;
+  onErrorCallback = null;
 
   onResultCallback = onResult;
   onErrorCallback = onError;

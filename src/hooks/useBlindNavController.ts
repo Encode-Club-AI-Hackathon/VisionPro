@@ -38,6 +38,8 @@ export function useBlindNavController(cameraReady: boolean) {
     currentStep,
     currentInstruction,
     remainingDistance,
+    pendingReroute,
+    confirmReroute,
     startNavigation,
     stopNavigation,
     speakCurrentLocation,
@@ -78,10 +80,16 @@ export function useBlindNavController(cameraReady: boolean) {
 
   const speakCurrentContext = useCallback(async () => {
     if (isNavigating && currentInstruction) {
-      speechService.speakNavigation(
-        `${currentInstruction} ` +
-          'Tap to repeat. Double tap to stop navigation. Swipe down for your location.'
-      );
+      if (pendingReroute) {
+        speechService.speakNavigation(
+          `You are off route. ${currentInstruction} Double tap to recalculate.`
+        );
+      } else {
+        speechService.speakNavigation(
+          `${currentInstruction} ` +
+            'Tap to repeat. Double tap to stop navigation. Swipe down for your location.'
+        );
+      }
       return;
     }
 
@@ -124,7 +132,7 @@ export function useBlindNavController(cameraReady: boolean) {
         'Swipe up to set a destination. Swipe down for your location. ' +
         'Long press for favorites. Two finger tap to toggle hazard detection.'
     );
-  }, [currentInstruction, hazardDetectionEnabled, isNavigating, mode]);
+  }, [currentInstruction, hazardDetectionEnabled, isNavigating, mode, pendingReroute]);
 
   const startSelectedDestination = useCallback(async () => {
     const destination = pendingDestinations.current[destinationIndex.current];
@@ -228,6 +236,8 @@ export function useBlindNavController(cameraReady: boolean) {
         case 'double_tap':
           if (mode === 'destination') {
             await stopListeningAndSubmit();
+          } else if (isNavigating && pendingReroute) {
+            await confirmReroute();
           } else if (isNavigating) {
             stopNavigation();
             setActiveDestinationName(undefined);
@@ -302,10 +312,12 @@ export function useBlindNavController(cameraReady: boolean) {
     },
     [
       clearDestinations,
+      confirmReroute,
       flashGesture,
       isNavigating,
       mode,
       openFavorites,
+      pendingReroute,
       speakCurrentContext,
       speakCurrentLocation,
       speakDestinationChoice,
