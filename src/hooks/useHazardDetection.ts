@@ -3,6 +3,9 @@ import type CameraView from 'expo-camera/build/CameraView';
 import { analyzeFrame } from '../services/gemini';
 import type { HazardReport } from '../types';
 
+// Set to false to quickly disable hazard detection during development
+export const HAZARD_DETECTION_ENABLED = true;
+
 // Fixed interval between scans — runs independently of TTS
 const SCAN_INTERVAL_MS = 5_000;
 
