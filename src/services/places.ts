@@ -4,12 +4,10 @@ import { distanceBetween } from './navigation';
 
 const PLACES_TEXT_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
 const PLACES_NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby';
-// Category (nearby) searches — want the NEAREST matching place
 const NEARBY_RADIUS_M = 1500;
 const NEARBY_WIDE_RADIUS_M = 5000;
-// Text searches — need a large enough area to find any named place in the city
-const TEXT_RADIUS_M = 10_000;
-const TEXT_WIDE_RADIUS_M = 30_000;
+const TEXT_RADIUS_M = 1500;
+const TEXT_WIDE_RADIUS_M = 5000;
 const MAX_RESULTS = 5;
 
 const GOOGLE_PLACES_API_KEY =
@@ -103,12 +101,13 @@ async function searchTextNearLocation(
   origin: Coordinate,
   radiusMeters: number
 ): Promise<GooglePlace[]> {
-  // locationRestriction (not locationBias) so results are hard-limited to the circle.
-  // locationBias is only a preference and can return results from other countries.
+  // searchText only supports locationRestriction with a rectangle, not a circle.
+  // locationBias with a large circle (10km) is the correct approach — it strongly
+  // prefers nearby results while still allowing the API to find named places.
   const response = await fetchPlaces(PLACES_TEXT_SEARCH_URL, {
     textQuery: query,
     maxResultCount: MAX_RESULTS,
-    locationRestriction: {
+    locationBias: {
       circle: {
         center: origin,
         radius: radiusMeters,
