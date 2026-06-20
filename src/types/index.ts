@@ -20,6 +20,14 @@ export interface Favorite {
   coordinate: Coordinate;
 }
 
+export interface DestinationSearchResult {
+  id: string;
+  name: string;
+  address: string;
+  coordinate: Coordinate;
+  distanceMeters: number;
+}
+
 export interface RouteStep {
   instruction: string;
   distance: number; // meters

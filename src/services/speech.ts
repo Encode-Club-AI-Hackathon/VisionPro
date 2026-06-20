@@ -1,4 +1,5 @@
 import * as Speech from 'expo-speech';
+import { Audio } from 'expo-av';
 import type { TTSMessage, TTSPriority } from '../types';
 
 const PRIORITY_RANK: Record<TTSPriority, number> = {
@@ -18,6 +19,7 @@ const PAUSE_AFTER: Record<TTSPriority, number> = {
 };
 
 const MAX_QUEUE_SIZE = 6;
+let playbackRouteReset: Promise<void> | null = null;
 
 class SpeechService {
   private queue: TTSMessage[] = [];
@@ -107,7 +109,7 @@ class SpeechService {
     }
   }
 
-  private processQueue(): void {
+  private async processQueue(): Promise<void> {
     if (this.queue.length === 0) {
       this.isSpeaking = false;
       this.currentPriority = null;
@@ -120,6 +122,8 @@ class SpeechService {
     this.currentPriority = message.priority;
     this.currentText = message.text;
 
+    await configurePlaybackAudioMode();
+
     Speech.speak(message.text, {
       language: 'en-US',
       rate: 0.95,
@@ -128,11 +132,11 @@ class SpeechService {
         const pause = PAUSE_AFTER[message.priority];
         this.pauseTimer = setTimeout(() => {
           this.pauseTimer = null;
-          this.processQueue();
+          this.processQueue().catch(() => {});
         }, pause);
       },
       onError: () => {
-        this.processQueue();
+        this.processQueue().catch(() => {});
       },
       onStopped: () => {
         // Stopped via interrupt — don't continue, the interrupter handles it
@@ -192,6 +196,92 @@ class SpeechService {
       };
       check();
     });
+  }
+}
+
+async function configurePlaybackAudioMode(): Promise<void> {
+  if (playbackRouteReset) {
+    await playbackRouteReset;
+    return;
+  }
+
+  playbackRouteReset = resetPlaybackRoute();
+  await playbackRouteReset;
+  playbackRouteReset = null;
+}
+
+async function resetPlaybackRoute(): Promise<void> {
+  try {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      playThroughEarpieceAndroid: false,
+    });
+    await primeExpoPlaybackSession();
+  } catch (error) {
+    console.warn('Failed to configure playback audio mode:', error);
+  }
+}
+
+async function primeExpoPlaybackSession(): Promise<void> {
+  let sound: Audio.Sound | null = null;
+
+  try {
+    const result = await Audio.Sound.createAsync(
+      { uri: getSilentWavDataUri() },
+      { shouldPlay: true, volume: 0 }
+    );
+    sound = result.sound;
+
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, 120);
+      sound?.setOnPlaybackStatusUpdate((status) => {
+        if ('didJustFinish' in status && status.didJustFinish) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+    });
+  } finally {
+    await sound?.unloadAsync().catch(() => {});
+  }
+}
+
+function getSilentWavDataUri(): string {
+  const sampleRate = 8000;
+  const duration = 0.05;
+  const numSamples = Math.floor(sampleRate * duration);
+  const dataSize = numSamples * 2;
+  const fileSize = 44 + dataSize;
+  const buffer = new ArrayBuffer(fileSize);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, fileSize - 8, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+
+  return 'data:audio/wav;base64,' + btoa(binary);
+}
+
+function writeString(view: DataView, offset: number, str: string): void {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
   }
 }
 

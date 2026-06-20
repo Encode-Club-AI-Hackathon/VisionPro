@@ -91,8 +91,9 @@ cd blind-nav
 # Install dependencies
 bun install
 
-# Add your Gemini API key
-echo "EXPO_PUBLIC_GEMINI_API_KEY=your_key_here" > .env
+# Add your API keys
+echo "EXPO_PUBLIC_GEMINI_API_KEY=your_gemini_key_here" > .env
+echo "EXPO_PUBLIC_GOOGLE_PLACES_API_KEY=your_google_places_key_here" >> .env
 
 # Start the dev server
 bunx expo start

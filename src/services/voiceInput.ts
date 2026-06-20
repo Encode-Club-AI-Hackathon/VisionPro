@@ -32,6 +32,7 @@ export async function startListening(
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
+      playThroughEarpieceAndroid: false,
     });
 
     recording = new Audio.Recording();
@@ -39,6 +40,11 @@ export async function startListening(
     await recording.startAsync();
     isListening = true;
   } catch (err) {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      playThroughEarpieceAndroid: false,
+    }).catch(() => {});
     onError(`Failed to start recording: ${err}`);
     cleanup();
   }
@@ -64,6 +70,7 @@ export async function stopListeningAndSubmit(): Promise<void> {
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
       playsInSilentModeIOS: true,
+      playThroughEarpieceAndroid: false,
     });
 
     // Read audio file as base64
@@ -112,6 +119,7 @@ export function cancelListening(): void {
     Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
       playsInSilentModeIOS: true,
+      playThroughEarpieceAndroid: false,
     }).catch(() => {});
   }
   cleanup();

@@ -4,13 +4,13 @@ import { CameraView } from 'expo-camera';
 import GestureOverlay from '../components/GestureOverlay';
 import StatusBar from '../components/StatusBar';
 import { speechService } from '../services/speech';
-import { geocodeAddress } from '../services/geocoding';
+import { findDestinationsNearMe } from '../services/places';
 import { playTone } from '../services/tone';
 import { useHazardDetection } from '../hooks/useHazardDetection';
 import { useNavigation } from '../hooks/useNavigation';
 import { getFavorites, getFavoritesCount } from '../store/favorites';
 import { startListening, stopListeningAndSubmit, cancelListening } from '../services/voiceInput';
-import type { AppMode, GestureType, Favorite } from '../types';
+import type { AppMode, GestureType, DestinationSearchResult } from '../types';
 
 export default function MainScreen() {
   const cameraRef = useRef<InstanceType<typeof CameraView>>(null);
@@ -18,6 +18,7 @@ export default function MainScreen() {
   const [hazardDetectionEnabled, setHazardDetectionEnabled] = useState(true);
   const [cameraReady, setCameraReady] = useState(false);
   const favoritesIndex = useRef(0);
+  const destinationIndex = useRef(0);
 
   const {
     isNavigating,
@@ -32,26 +33,29 @@ export default function MainScreen() {
   const { lastHazards } = useHazardDetection(cameraRef, hazardsActive);
   const [lastGesture, setLastGesture] = useState<string | null>(null);
   const gestureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDestinations = useRef<DestinationSearchResult[]>([]);
 
   const handleDestinationVoiceResult = useCallback(
     async (text: string) => {
       setMode('explore');
       speechService.speakInfo(`Searching for ${text}`);
 
-      const coordinate = await geocodeAddress(text);
-      if (!coordinate) {
-        speechService.speakWarning(`Could not find a location for "${text}". Please try again.`);
+      const destinations = await findDestinationsNearMe(text);
+      if (destinations.length === 0) {
+        pendingDestinations.current = [];
+        destinationIndex.current = 0;
+        speechService.speakWarning(
+          `Could not find a nearby location for "${text}". Please try again.`
+        );
         return;
       }
 
-      speechService.speakInfo(`Found ${text}. Double tap to start navigation.`);
-      // Store pending destination
-      pendingDestination.current = coordinate;
+      pendingDestinations.current = destinations;
+      destinationIndex.current = 0;
+      speechService.speakInfo(formatDestinationChoice(destinations[0], destinations.length));
     },
-    [startNavigation]
+    []
   );
-
-  const pendingDestination = useRef<{ latitude: number; longitude: number } | null>(null);
 
   const GESTURE_LABELS: Record<GestureType, string> = {
     single_tap: 'Tap',
@@ -99,6 +103,11 @@ export default function MainScreen() {
               'Listening for your destination. Speak now. ' +
               'Double tap when done. Swipe left to cancel.'
             );
+          } else if (pendingDestinations.current.length > 0) {
+            const destination = pendingDestinations.current[destinationIndex.current];
+            speechService.speakInfo(
+              formatDestinationChoice(destination, pendingDestinations.current.length)
+            );
           } else {
             // Explore mode — give status + available actions
             const hazardStatus = hazardDetectionEnabled ? 'Hazard detection on' : 'Hazard detection off';
@@ -114,17 +123,18 @@ export default function MainScreen() {
         case 'double_tap': {
           if (mode === 'destination') {
             // Submit voice input
-            speechService.speakInfo('Processing your destination.');
             await stopListeningAndSubmit();
             break;
           } else if (isNavigating) {
             stopNavigation();
             setMode('explore');
-          } else if (pendingDestination.current) {
+          } else if (pendingDestinations.current.length > 0) {
             setMode('navigate');
-            const dest = pendingDestination.current;
-            pendingDestination.current = null;
-            await startNavigation(dest);
+            const destination = pendingDestinations.current[destinationIndex.current];
+            pendingDestinations.current = [];
+            destinationIndex.current = 0;
+            speechService.speakInfo(`Starting navigation to ${destination.name}`);
+            await startNavigation(destination.coordinate);
           } else if (mode === 'favorites') {
             // Start navigation to selected favorite
             const favorites = await getFavorites();
@@ -152,6 +162,13 @@ export default function MainScreen() {
               const fav = favorites[favoritesIndex.current];
               speechService.speakInfo(`${fav.name}. Swipe right for next, double tap to navigate.`);
             }
+          } else if (pendingDestinations.current.length > 0) {
+            destinationIndex.current =
+              (destinationIndex.current + 1) % pendingDestinations.current.length;
+            const destination = pendingDestinations.current[destinationIndex.current];
+            speechService.speakInfo(
+              formatDestinationChoice(destination, pendingDestinations.current.length)
+            );
           } else {
             speechService.speakInfo('Confirmed');
           }
@@ -166,6 +183,10 @@ export default function MainScreen() {
             cancelListening();
             setMode('explore');
             speechService.speakInfo('Cancelled. Back to explore mode.');
+          } else if (pendingDestinations.current.length > 0) {
+            pendingDestinations.current = [];
+            destinationIndex.current = 0;
+            speechService.speakInfo('Destination cleared. Back to explore mode.');
           } else {
             speechService.speakInfo('Cancelled');
           }
@@ -249,6 +270,25 @@ export default function MainScreen() {
       <GestureOverlay onGesture={handleGesture} />
     </View>
   );
+}
+
+function formatDestinationChoice(
+  destination: DestinationSearchResult,
+  totalResults: number
+): string {
+  const distance = formatSpokenDistance(destination.distanceMeters);
+  const moreResults =
+    totalResults > 1 ? ' Swipe right for the next nearby result.' : '';
+
+  return (
+    `Found ${destination.name}, ${distance} away. ` +
+    `${destination.address}. Double tap to start navigation.${moreResults}`
+  );
+}
+
+function formatSpokenDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} meters`;
+  return `${(meters / 1000).toFixed(1)} kilometers`;
 }
 
 const styles = StyleSheet.create({
