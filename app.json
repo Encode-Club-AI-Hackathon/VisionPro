@@ -1,25 +1,36 @@
 {
   "expo": {
-    "name": "blind-nav",
+    "name": "BlindNav",
     "slug": "blind-nav",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.blindnav.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "BlindNav uses the camera to detect obstacles and hazards in your path.",
+        "NSLocationWhenInUseUsageDescription": "BlindNav uses your location for turn-by-turn navigation.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "BlindNav uses your location for continuous navigation guidance.",
+        "NSSpeechRecognitionUsageDescription": "BlindNav uses speech recognition so you can speak your destination.",
+        "NSMicrophoneUsageDescription": "BlindNav uses the microphone for voice input to set destinations."
+      }
     },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "BlindNav uses the camera to detect obstacles and hazards."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "BlindNav uses your location for navigation.",
+          "locationAlwaysAndWhenInUsePermission": "BlindNav uses your location for continuous navigation."
+        }
+      ]
+    ]
   }
 }
