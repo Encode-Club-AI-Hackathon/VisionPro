@@ -1,12 +1,16 @@
 import { Audio } from 'expo-av';
 import { generateText } from 'ai';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
-const google = createGoogleGenerativeAI({
-  apiKey: process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
+const flock = createOpenAICompatible({
+  name: 'flock',
+  baseURL: 'https://api.flock.io/v1',
+  headers: {
+    'x-litellm-api-key': process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
+  },
 });
 
-const model = google('gemini-3.1-flash-lite');
+const model = flock('gemini-3-flash-preview');
 
 let isListening = false;
 let recording: Audio.Recording | null = null;

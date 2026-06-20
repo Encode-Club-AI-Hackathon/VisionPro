@@ -153,7 +153,7 @@ async function fetchPlaces(url: string, body: object): Promise<PlacesResponse> {
     return {};
   }
 
-  return response.json();
+  return response.json() as Promise<PlacesResponse>;
 }
 
 function normalizePlaces(
