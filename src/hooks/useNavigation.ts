@@ -26,7 +26,11 @@ const WRONG_WAY_ANGLE_STRONG = 120;
 const WRONG_WAY_ANGLE_MODERATE = 90;
 
 const POSITION_HISTORY_MAX = 8;
-const POSITION_MIN_SPACING_M = 1.5;
+const POSITION_MIN_SPACING_M = 2.0;  // filter GPS noise per step
+const POSITION_TOTAL_MIN_M = 6.0;    // total path length required before trusting bearing
+
+const PROGRESS_INTERVAL_MS = 10_000; // periodic "X meters to next turn" announcement
+const PROGRESS_MIN_DIST_M = 30;      // don't speak if approaching (approach prompts handle it)
 
 interface UseNavigationResult {
   isNavigating: boolean;
@@ -49,7 +53,7 @@ function computeSmoothedBearing(positions: Coordinate[]): number | null {
     const dist = distanceBetween(positions[i - 1], positions[i]);
     if (dist < 0.5) continue;
     const bearing = bearingBetween(positions[i - 1], positions[i]);
-    const weight = i; // newer pairs weighted more
+    const weight = i;
     const rad = (bearing * Math.PI) / 180;
     sinSum += Math.sin(rad) * weight;
     cosSum += Math.cos(rad) * weight;
@@ -59,6 +63,14 @@ function computeSmoothedBearing(positions: Coordinate[]): number | null {
   if (totalWeight === 0) return null;
   const meanRad = Math.atan2(sinSum / totalWeight, cosSum / totalWeight);
   return ((meanRad * 180) / Math.PI + 360) % 360;
+}
+
+function computePathLength(positions: Coordinate[]): number {
+  let total = 0;
+  for (let i = 1; i < positions.length; i++) {
+    total += distanceBetween(positions[i - 1], positions[i]);
+  }
+  return total;
 }
 
 export function useNavigation(): UseNavigationResult {
@@ -74,6 +86,10 @@ export function useNavigation(): UseNavigationResult {
   const isNavigatingRef = useRef(false);
   const currentLocationRef = useRef<Coordinate | null>(null);
 
+  // Generation counter: incremented on every cleanup so in-flight startNavigation
+  // calls can detect they've been superseded (race condition fix).
+  const navGenRef = useRef(0);
+
   const positionHistoryRef = useRef<Coordinate[]>([]);
   const smoothTravelBearingRef = useRef<number | null>(null);
   const stepPolylineMapRef = useRef<number[]>([]);
@@ -83,11 +99,13 @@ export function useNavigation(): UseNavigationResult {
   const lastWrongWayWarningAtRef = useRef(0);
   const spokenTurnPromptsRef = useRef<Set<string>>(new Set());
   const lastRouteWarningAtRef = useRef(0);
+  const lastProgressAnnouncementAtRef = useRef(0);
 
-  // Ref to startNavigation so handleLocationUpdate can call it without circular deps
+  // Ref to startNavigation so handleLocationUpdate can reroute without a circular dep
   const startNavigationRef = useRef<(destination: Coordinate) => Promise<void>>(async () => {});
 
   const cleanup = useCallback(() => {
+    navGenRef.current++;
     locationSubRef.current?.remove();
     locationSubRef.current = null;
     routeRef.current = null;
@@ -103,6 +121,7 @@ export function useNavigation(): UseNavigationResult {
     lastWrongWayWarningAtRef.current = 0;
     spokenTurnPromptsRef.current.clear();
     lastRouteWarningAtRef.current = 0;
+    lastProgressAnnouncementAtRef.current = 0;
     setIsNavigating(false);
     setCurrentStep(null);
     setCurrentInstruction('');
@@ -125,6 +144,12 @@ export function useNavigation(): UseNavigationResult {
     setCurrentInstruction(step.instruction);
     wrongWayScoreRef.current = 0;
     spokenTurnPromptsRef.current.clear();
+    // Reset bearing history at each step so wrong-way detection starts fresh
+    positionHistoryRef.current = currentLocationRef.current
+      ? [currentLocationRef.current]
+      : [];
+    smoothTravelBearingRef.current = null;
+    lastProgressAnnouncementAtRef.current = 0;
     speechService.speakNavigation(formatGuidedInstruction(step, currentLocationRef.current));
   }, [cleanup]);
 
@@ -138,13 +163,18 @@ export function useNavigation(): UseNavigationResult {
       };
       currentLocationRef.current = coord;
 
-      // Maintain position history, filtering GPS noise
+      // Maintain position history with minimum spacing to suppress GPS noise
       const history = positionHistoryRef.current;
       const last = history.length > 0 ? history[history.length - 1] : null;
       if (!last || distanceBetween(last, coord) >= POSITION_MIN_SPACING_M) {
         history.push(coord);
         if (history.length > POSITION_HISTORY_MAX) history.shift();
-        smoothTravelBearingRef.current = computeSmoothedBearing(history);
+
+        // Only trust the bearing if the user has moved a meaningful total distance.
+        // This prevents standing-still GPS drift from triggering wrong-way warnings.
+        const pathLen = computePathLength(history);
+        smoothTravelBearingRef.current =
+          pathLen >= POSITION_TOTAL_MIN_M ? computeSmoothedBearing(history) : null;
       }
 
       const route = routeRef.current;
@@ -154,7 +184,7 @@ export function useNavigation(): UseNavigationResult {
       const step = route.steps[stepIdx];
       if (!step) return;
 
-      // Track progress along polyline — never go backward
+      // Track progress along polyline — only advance, never go backward
       const nearestIdx = nearestPolylineIndex(coord, route.polyline);
       if (nearestIdx > currentPolylineIndexRef.current) {
         currentPolylineIndexRef.current = nearestIdx;
@@ -167,7 +197,7 @@ export function useNavigation(): UseNavigationResult {
       );
       setRemainingDistance(remainingPolylineDist);
 
-      // Off-route detection with automatic reroute
+      // Off-route detection → automatic reroute
       const routeDeviation = distanceToRoutePolyline(coord, route.polyline);
       if (
         Number.isFinite(routeDeviation) &&
@@ -228,22 +258,16 @@ export function useNavigation(): UseNavigationResult {
         }
       }
 
-      // Wrong-way detection using smoothed multi-sample travel bearing
+      // Wrong-way detection — only fires when bearing is trusted (user actually moving)
       const smoothBearing = smoothTravelBearingRef.current;
       if (smoothBearing !== null) {
         const requiredBearing = bearingBetween(coord, step.coordinate);
         const angleDiff = Math.abs(((smoothBearing - requiredBearing + 540) % 360) - 180);
 
         if (angleDiff > WRONG_WAY_ANGLE_STRONG) {
-          wrongWayScoreRef.current = Math.min(
-            wrongWayScoreRef.current + 3,
-            WRONG_WAY_SCORE_MAX
-          );
+          wrongWayScoreRef.current = Math.min(wrongWayScoreRef.current + 3, WRONG_WAY_SCORE_MAX);
         } else if (angleDiff > WRONG_WAY_ANGLE_MODERATE) {
-          wrongWayScoreRef.current = Math.min(
-            wrongWayScoreRef.current + 1,
-            WRONG_WAY_SCORE_MAX
-          );
+          wrongWayScoreRef.current = Math.min(wrongWayScoreRef.current + 1, WRONG_WAY_SCORE_MAX);
         } else if (angleDiff < 60) {
           wrongWayScoreRef.current = Math.max(0, wrongWayScoreRef.current - 2);
         }
@@ -255,8 +279,24 @@ export function useNavigation(): UseNavigationResult {
           lastWrongWayWarningAtRef.current = Date.now();
           wrongWayScoreRef.current = 0;
           const direction = getDirectionFromBearing(requiredBearing, smoothBearing);
-          speechService.speakNavigation(buildWrongWayMessage(direction));
+          speechService.speakNavigation(buildWrongWayMessage(direction, step.instruction));
         }
+      }
+
+      // Periodic progress announcement every ~10s while on correct path
+      const now = Date.now();
+      const wrongWayScore = wrongWayScoreRef.current;
+      if (
+        now - lastProgressAnnouncementAtRef.current >= PROGRESS_INTERVAL_MS &&
+        distToWaypoint > PROGRESS_MIN_DIST_M &&
+        wrongWayScore < 3 // skip if wrong-way suspicion is high
+      ) {
+        lastProgressAnnouncementAtRef.current = now;
+        const nextStep = route.steps[stepIdx + 1];
+        const msg = nextStep
+          ? `${formatSpokenDistance(distToWaypoint)} to your next waypoint. Then: ${nextStep.instruction}`
+          : `${formatSpokenDistance(distToWaypoint)} to your destination.`;
+        speechService.speakNavigation(msg);
       }
     },
     [advanceStep]
@@ -265,8 +305,12 @@ export function useNavigation(): UseNavigationResult {
   const startNavigation = useCallback(
     async (destination: Coordinate) => {
       cleanup();
+      // Capture generation AFTER cleanup incremented it. Any previous in-flight
+      // startNavigation will have a lower generation and will bail out.
+      const thisGen = navGenRef.current;
 
       const { status } = await Location.requestForegroundPermissionsAsync();
+      if (navGenRef.current !== thisGen) return;
       if (status !== 'granted') {
         speechService.speakImmediate('Location permission required for navigation.');
         return;
@@ -275,6 +319,8 @@ export function useNavigation(): UseNavigationResult {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
+      if (navGenRef.current !== thisGen) return;
+
       const origin: Coordinate = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
@@ -285,6 +331,8 @@ export function useNavigation(): UseNavigationResult {
       speechService.speakInfo('Calculating route. Please wait.');
 
       const route = await getWalkingRoute(origin, destination);
+      if (navGenRef.current !== thisGen) return;
+
       if (!route || route.steps.length === 0) {
         speechService.speakImmediate('Could not find a walking route to that destination.');
         return;
@@ -314,7 +362,9 @@ export function useNavigation(): UseNavigationResult {
       setIsNavigating(true);
 
       setTimeout(() => {
-        speechService.speakNavigation(formatGuidedInstruction(firstStep, origin));
+        if (navGenRef.current === thisGen) {
+          speechService.speakNavigation(formatGuidedInstruction(firstStep, origin));
+        }
       }, 2000);
 
       locationSubRef.current = await Location.watchPositionAsync(
@@ -329,7 +379,6 @@ export function useNavigation(): UseNavigationResult {
     [cleanup, handleLocationUpdate]
   );
 
-  // Keep startNavigationRef in sync so handleLocationUpdate can call it
   useEffect(() => {
     startNavigationRef.current = startNavigation;
   }, [startNavigation]);
@@ -395,13 +444,20 @@ function formatGuidedInstruction(step: RouteStep, current: Coordinate | null): s
   return step.instruction;
 }
 
-function buildWrongWayMessage(direction: string): string {
-  if (direction === 'behind you') return 'Wrong way. Turn around.';
-  if (direction === 'to your right') return 'Wrong way. Turn right.';
-  if (direction === 'to your left') return 'Wrong way. Turn left.';
-  if (direction === 'slightly right') return 'Wrong way. Bear right.';
-  if (direction === 'slightly left') return 'Wrong way. Bear left.';
-  return `Wrong way. The route is ${direction}.`;
+function buildWrongWayMessage(direction: string, stepInstruction: string): string {
+  let turn: string;
+  if (direction === 'behind you') turn = 'Turn around.';
+  else if (direction === 'to your right') turn = 'Turn right.';
+  else if (direction === 'to your left') turn = 'Turn left.';
+  else if (direction === 'slightly right') turn = 'Bear right.';
+  else if (direction === 'slightly left') turn = 'Bear left.';
+  else turn = `Head ${direction}.`;
+  return `Wrong way. ${turn} ${stepInstruction}`;
+}
+
+function formatSpokenDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} meters`;
+  return `${(meters / 1000).toFixed(1)} kilometers`;
 }
 
 function bearingToCardinalDirection(bearing: number): string {
