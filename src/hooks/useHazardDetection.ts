@@ -1,122 +1,119 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import type CameraView from 'expo-camera/build/CameraView';
 import { analyzeFrame } from '../services/gemini';
 import { speechService } from '../services/speech';
 import type { HazardReport } from '../types';
 
-// How long (ms) before the same hazard tag can be spoken again
+// Fixed interval between scans — runs independently of TTS
+const SCAN_INTERVAL_MS = 5_000;
+// How long before the same hazard tag can be spoken again
 const DEDUP_WINDOW_MS = 30_000;
-// Minimum pause between capture cycles so we don't hammer the API
-const MIN_CYCLE_GAP_MS = 2_000;
+// If speech queue is this full, skip adding info-level hazards
+const QUEUE_PRESSURE_THRESHOLD = 3;
 
 export function useHazardDetection(
   cameraRef: React.RefObject<CameraView | null>,
   enabled: boolean
 ) {
   const [lastHazards, setLastHazards] = useState<HazardReport[]>([]);
-  // Map of normalised description → timestamp of when it was last spoken
   const recentlySaid = useRef<Map<string, number>>(new Map());
-  const abortRef = useRef(false);
+  const isAnalyzing = useRef(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const scan = useCallback(async () => {
+    // Skip if already analyzing or camera not ready
+    if (isAnalyzing.current || !cameraRef.current) return;
+
+    isAnalyzing.current = true;
+
+    try {
+      // 1. Capture frame
+      let photo: { base64?: string | null } | undefined;
+      try {
+        photo = await cameraRef.current.takePictureAsync({
+          base64: true,
+          quality: 0.3,
+          skipProcessing: true,
+        });
+      } catch {
+        // Camera busy, skip this cycle
+        return;
+      }
+
+      if (!photo?.base64) return;
+
+      // 2. Analyze with Gemini (runs in background, doesn't block TTS)
+      const hazards = await analyzeFrame(photo.base64);
+      setLastHazards(hazards);
+
+      // 3. Prune stale dedup entries
+      const now = Date.now();
+      for (const [key, ts] of recentlySaid.current) {
+        if (now - ts > DEDUP_WINDOW_MS) {
+          recentlySaid.current.delete(key);
+        }
+      }
+
+      // 4. Check queue pressure — if speech is backed up, drop info items
+      //    from the queue to make room for new hazards
+      const queueLen = speechService.queueLength;
+      if (queueLen >= QUEUE_PRESSURE_THRESHOLD) {
+        speechService.clearInfo();
+      }
+
+      // 5. Queue new hazards by priority — the priority queue handles ordering
+      for (const hazard of hazards) {
+        const lastSaid = recentlySaid.current.get(hazard.tag);
+        if (lastSaid && now - lastSaid < DEDUP_WINDOW_MS) {
+          continue; // already said recently
+        }
+
+        // Under queue pressure, skip info-level hazards entirely
+        if (hazard.severity === 'info' && queueLen >= QUEUE_PRESSURE_THRESHOLD) {
+          continue;
+        }
+
+        recentlySaid.current.set(hazard.tag, now);
+
+        switch (hazard.severity) {
+          case 'critical':
+            speechService.speakImmediate(hazard.description);
+            break;
+          case 'warning':
+            speechService.speakWarning(hazard.description);
+            break;
+          case 'info':
+            speechService.speakInfo(hazard.description);
+            break;
+        }
+      }
+    } catch (error) {
+      console.error('Gemini analysis error:', error);
+    } finally {
+      isAnalyzing.current = false;
+    }
+  }, [cameraRef]);
 
   useEffect(() => {
-    if (!enabled) {
-      abortRef.current = true;
-      return;
-    }
-
-    abortRef.current = false;
-
-    async function loop() {
-      while (!abortRef.current) {
-        // 1. Wait until TTS has finished everything in the queue
-        await speechService.waitUntilIdle();
-        if (abortRef.current) break;
-
-        // 2. Bail if camera isn't ready
-        if (!cameraRef.current) {
-          await sleep(MIN_CYCLE_GAP_MS);
-          continue;
-        }
-
-        const cycleStart = Date.now();
-
-        // 3. Capture frame — camera can be briefly busy, just skip on failure
-        let photo: { base64?: string | null } | undefined;
-        try {
-          photo = await cameraRef.current.takePictureAsync({
-            base64: true,
-            quality: 0.3,
-            skipProcessing: true,
-          });
-        } catch {
-          // Camera busy or not ready, wait and retry next cycle
-          await sleep(MIN_CYCLE_GAP_MS);
-          continue;
-        }
-
-        if (abortRef.current) break;
-        if (!photo?.base64) {
-          await sleep(MIN_CYCLE_GAP_MS);
-          continue;
-        }
-
-        try {
-          // 4. Analyse with Gemini
-          const hazards = await analyzeFrame(photo.base64);
-          if (abortRef.current) break;
-          setLastHazards(hazards);
-
-          // 5. Prune stale entries from the dedup cache
-          const now = Date.now();
-          for (const [key, ts] of recentlySaid.current) {
-            if (now - ts > DEDUP_WINDOW_MS) {
-              recentlySaid.current.delete(key);
-            }
-          }
-
-          // 6. Speak only hazards whose tag hasn't been said recently
-          for (const hazard of hazards) {
-            const lastSaid = recentlySaid.current.get(hazard.tag);
-            if (lastSaid && now - lastSaid < DEDUP_WINDOW_MS) {
-              continue; // skip, already said this recently
-            }
-
-            recentlySaid.current.set(hazard.tag, now);
-
-            switch (hazard.severity) {
-              case 'critical':
-                await speechService.speakImmediate(hazard.description);
-                break;
-              case 'warning':
-                await speechService.speakWarning(hazard.description);
-                break;
-              case 'info':
-                await speechService.speakInfo(hazard.description);
-                break;
-            }
-          }
-        } catch (error) {
-          console.error('Gemini analysis error:', error);
-        }
-
-        // 7. Ensure minimum gap between cycles
-        const elapsed = Date.now() - cycleStart;
-        if (elapsed < MIN_CYCLE_GAP_MS) {
-          await sleep(MIN_CYCLE_GAP_MS - elapsed);
-        }
+    if (enabled) {
+      // Run first scan immediately
+      scan();
+      // Then on a fixed interval
+      intervalRef.current = setInterval(scan, SCAN_INTERVAL_MS);
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
       }
     }
 
-    loop();
-
     return () => {
-      abortRef.current = true;
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
-  }, [enabled, cameraRef]);
+  }, [enabled, scan]);
 
   return { lastHazards };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

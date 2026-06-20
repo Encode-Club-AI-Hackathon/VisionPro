@@ -5,10 +5,11 @@ import GestureOverlay from '../components/GestureOverlay';
 import StatusBar from '../components/StatusBar';
 import { speechService } from '../services/speech';
 import { geocodeAddress } from '../services/geocoding';
+import { playTone } from '../services/tone';
 import { useHazardDetection } from '../hooks/useHazardDetection';
 import { useNavigation } from '../hooks/useNavigation';
 import { getFavorites, getFavoritesCount } from '../store/favorites';
-import { startListening, stopListening, getIsListening } from '../services/voiceInput';
+import { startListening, stopListeningAndSubmit, cancelListening } from '../services/voiceInput';
 import type { AppMode, GestureType, Favorite } from '../types';
 
 export default function MainScreen() {
@@ -27,7 +28,8 @@ export default function MainScreen() {
     speakCurrentLocation,
   } = useNavigation();
 
-  const { lastHazards } = useHazardDetection(cameraRef, hazardDetectionEnabled && cameraReady);
+  const hazardsActive = hazardDetectionEnabled && cameraReady && mode !== 'destination';
+  const { lastHazards } = useHazardDetection(cameraRef, hazardsActive);
   const [lastGesture, setLastGesture] = useState<string | null>(null);
   const gestureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -94,7 +96,8 @@ export default function MainScreen() {
             }
           } else if (mode === 'destination') {
             speechService.speakInfo(
-              'Listening for your destination. Speak now, or swipe left to cancel.'
+              'Listening for your destination. Speak now. ' +
+              'Double tap when done. Swipe left to cancel.'
             );
           } else {
             // Explore mode — give status + available actions
@@ -109,7 +112,12 @@ export default function MainScreen() {
         }
 
         case 'double_tap': {
-          if (isNavigating) {
+          if (mode === 'destination') {
+            // Submit voice input
+            speechService.speakInfo('Processing your destination.');
+            await stopListeningAndSubmit();
+            break;
+          } else if (isNavigating) {
             stopNavigation();
             setMode('explore');
           } else if (pendingDestination.current) {
@@ -155,7 +163,7 @@ export default function MainScreen() {
             setMode('explore');
             speechService.speakInfo('Leaving favorites. Back to explore mode.');
           } else if (mode === 'destination') {
-            stopListening();
+            cancelListening();
             setMode('explore');
             speechService.speakInfo('Cancelled. Back to explore mode.');
           } else {
@@ -165,18 +173,18 @@ export default function MainScreen() {
         }
 
         case 'swipe_up': {
-          // Set destination via voice
+          // Set destination via voice — pause hazards, prompt, tone, then listen
           setMode('destination');
-          speechService.speakInfo('Speak your destination after the tone.');
-          setTimeout(() => {
-            startListening(
-              handleDestinationVoiceResult,
-              (error) => {
-                speechService.speakWarning(`Voice input failed. ${error}`);
-                setMode('explore');
-              }
-            );
-          }, 1500);
+          await speechService.speakInfo('Speak your destination after the tone. Double tap when done.');
+          await speechService.waitUntilIdle();
+          await playTone();
+          startListening(
+            handleDestinationVoiceResult,
+            (error) => {
+              speechService.speakWarning(`Voice input failed. ${error}`);
+              setMode('explore');
+            }
+          );
           break;
         }
 

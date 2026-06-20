@@ -1,63 +1,143 @@
 import { Audio } from 'expo-av';
+import { generateText } from 'ai';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
+});
+
+const model = google('gemini-3.1-flash-lite');
 
 let isListening = false;
+let recording: Audio.Recording | null = null;
+let onResultCallback: ((text: string) => void) | null = null;
+let onErrorCallback: ((error: string) => void) | null = null;
 
-export async function requestMicrophonePermission(): Promise<boolean> {
-  const { granted } = await Audio.requestPermissionsAsync();
-  return granted;
-}
-
-// Note: Expo doesn't have a built-in speech recognition module.
-// On iOS, we use a workaround: record audio and send to a speech-to-text service,
-// or use the native SFSpeechRecognizer via a custom native module.
-// For this implementation, we provide a simulated voice input that can be
-// replaced with a real speech recognition integration.
-
-type VoiceResultCallback = (text: string) => void;
-type VoiceErrorCallback = (error: string) => void;
-
-let onResultCallback: VoiceResultCallback | null = null;
-let onErrorCallback: VoiceErrorCallback | null = null;
-
-export function startListening(
-  onResult: VoiceResultCallback,
-  onError: VoiceErrorCallback
-): void {
+export async function startListening(
+  onResult: (text: string) => void,
+  onError: (error: string) => void
+): Promise<void> {
   if (isListening) return;
-  isListening = true;
+
   onResultCallback = onResult;
   onErrorCallback = onError;
 
-  // In production, this would hook into iOS SFSpeechRecognizer
-  // or a cloud speech-to-text API via audio recording.
-  // For now, we set up the audio session for recording.
-  setupAudioSession().catch((err) => {
-    onError(`Failed to start voice input: ${err}`);
-    isListening = false;
-  });
+  try {
+    const { granted } = await Audio.requestPermissionsAsync();
+    if (!granted) {
+      onError('Microphone permission not granted');
+      return;
+    }
+
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+    });
+
+    recording = new Audio.Recording();
+    await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+    await recording.startAsync();
+    isListening = true;
+  } catch (err) {
+    onError(`Failed to start recording: ${err}`);
+    cleanup();
+  }
 }
 
-export function stopListening(): void {
-  isListening = false;
-  onResultCallback = null;
-  onErrorCallback = null;
+export async function stopListeningAndSubmit(): Promise<void> {
+  if (!isListening || !recording) {
+    onErrorCallback?.('Not currently listening');
+    cleanup();
+    return;
+  }
+
+  try {
+    await recording.stopAndUnloadAsync();
+    const uri = recording.getURI();
+    if (!uri) {
+      onErrorCallback?.('No audio recorded');
+      cleanup();
+      return;
+    }
+
+    // Reset audio mode so TTS works again
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+    });
+
+    // Read audio file as base64
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    const base64 = await blobToBase64(blob);
+
+    // Send to Gemini for transcription
+    const { text } = await generateText({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Transcribe this audio. The user is speaking a destination or address. Return ONLY the transcribed text, nothing else. No quotes, no explanation.',
+            },
+            {
+              type: 'file' as const,
+              data: base64,
+              mediaType: 'audio/mp4' as const,
+            },
+          ],
+        },
+      ],
+      temperature: 0,
+    });
+
+    const trimmed = text.trim();
+    if (trimmed) {
+      onResultCallback?.(trimmed);
+    } else {
+      onErrorCallback?.('Could not understand the audio. Please try again.');
+    }
+  } catch (err) {
+    onErrorCallback?.(`Voice recognition failed: ${err}`);
+  } finally {
+    cleanup();
+  }
+}
+
+export function cancelListening(): void {
+  if (recording && isListening) {
+    recording.stopAndUnloadAsync().catch(() => {});
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+    }).catch(() => {});
+  }
+  cleanup();
 }
 
 export function getIsListening(): boolean {
   return isListening;
 }
 
-// Simulate voice input result for testing
-export function simulateVoiceResult(text: string): void {
-  if (onResultCallback) {
-    onResultCallback(text);
-  }
-  stopListening();
+function cleanup(): void {
+  isListening = false;
+  recording = null;
+  onResultCallback = null;
+  onErrorCallback = null;
 }
 
-async function setupAudioSession(): Promise<void> {
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: true,
-    playsInSilentModeIOS: true,
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Strip the data:...;base64, prefix
+      const base64 = result.split(',')[1] ?? result;
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
   });
 }

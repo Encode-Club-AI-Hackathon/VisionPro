@@ -58,6 +58,7 @@ const GESTURE_HINTS: Record<AppMode, string[]> = {
   ],
   destination: [
     'Speak your destination',
+    'DOUBLE TAP = Done',
     'SWIPE LEFT = Cancel',
   ],
   favorites: [
