@@ -1,58 +1,64 @@
 import type { Coordinate, Route, RouteStep } from '../types';
 
-const OSRM_BASE = 'https://router.project-osrm.org/route/v1/foot';
+const GMAPS_DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
+
+const GOOGLE_MAPS_API_KEY =
+  process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ??
+  process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY ??
+  '';
 
 export async function getWalkingRoute(
   origin: Coordinate,
   destination: Coordinate
 ): Promise<Route | null> {
+  if (!GOOGLE_MAPS_API_KEY) {
+    console.warn('Google Maps API key not set');
+    return null;
+  }
+
   try {
     const url =
-      `${OSRM_BASE}/${origin.longitude},${origin.latitude}` +
-      `;${destination.longitude},${destination.latitude}` +
-      `?overview=full&geometries=geojson&steps=true`;
+      `${GMAPS_DIRECTIONS_URL}` +
+      `?origin=${origin.latitude},${origin.longitude}` +
+      `&destination=${destination.latitude},${destination.longitude}` +
+      `&mode=walking` +
+      `&language=en` +
+      `&key=${GOOGLE_MAPS_API_KEY}`;
 
     const response = await fetch(url);
     if (!response.ok) {
-      console.error('OSRM error:', response.status);
+      console.error('Google Directions error:', response.status);
       return null;
     }
 
     const data: any = await response.json();
-    if (data.code !== 'Ok' || !data.routes?.length) return null;
+    if (data.status !== 'OK' || !data.routes?.length) {
+      console.error('Google Directions failed:', data.status);
+      return null;
+    }
 
     const route = data.routes[0];
-    const legs = route.legs[0];
+    const leg = route.legs[0];
 
-    const steps: RouteStep[] = legs.steps.map(
-      (step: {
-        maneuver: { type: string; modifier?: string; location: [number, number] };
-        distance: number;
-        duration: number;
-        name: string;
-      }) => ({
-        instruction: formatInstruction(step),
-        distance: step.distance,
-        duration: step.duration,
-        coordinate: {
-          latitude: step.maneuver.location[1],
-          longitude: step.maneuver.location[0],
-        },
-        maneuver: step.maneuver.type,
-      })
-    );
+    const steps: RouteStep[] = leg.steps.map((step: any) => ({
+      instruction: stripHtml(step.html_instructions),
+      distance: step.distance.value,
+      duration: step.duration.value,
+      // end_location is the waypoint to reach — when the user arrives here the next
+      // instruction fires (same semantics as OSRM's maneuver.location on next step).
+      coordinate: {
+        latitude: step.end_location.lat,
+        longitude: step.end_location.lng,
+      },
+      maneuver: step.maneuver ?? 'straight',
+    }));
 
-    const polyline: Coordinate[] = route.geometry.coordinates.map(
-      ([lng, lat]: [number, number]) => ({
-        latitude: lat,
-        longitude: lng,
-      })
-    );
+    const polyline = decodePolyline(route.overview_polyline.points);
 
     return {
       steps,
-      totalDistance: route.distance,
-      totalDuration: route.duration,
+      totalDistance: leg.distance.value,
+      totalDuration: leg.duration.value,
       polyline,
     };
   } catch (error) {
@@ -61,39 +67,48 @@ export async function getWalkingRoute(
   }
 }
 
-function formatInstruction(step: {
-  maneuver: { type: string; modifier?: string };
-  distance: number;
-  name: string;
-}): string {
-  const { type, modifier } = step.maneuver;
-  const distanceText = formatDistance(step.distance);
-  const streetName = step.name ? ` onto ${step.name}` : '';
-
-  switch (type) {
-    case 'depart':
-      return `Start walking${streetName}. Continue for ${distanceText}.`;
-    case 'arrive':
-      return 'You have arrived at your destination.';
-    case 'turn':
-      return `Turn ${modifier ?? 'ahead'}${streetName}. Continue for ${distanceText}.`;
-    case 'continue':
-      return `Continue straight${streetName} for ${distanceText}.`;
-    case 'new name':
-      return `Continue onto${streetName} for ${distanceText}.`;
-    case 'end of road':
-      return `At the end of the road, turn ${modifier ?? 'ahead'}${streetName}.`;
-    case 'roundabout':
-      return `Enter the roundabout and take the exit${streetName}.`;
-    default:
-      return `${modifier ? modifier.charAt(0).toUpperCase() + modifier.slice(1) : 'Continue'}${streetName}. ${distanceText}.`;
-  }
+function stripHtml(html: string): string {
+  return html
+    .replace(/<div[^>]*>/gi, '. ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+    .replace(/\s+/g, ' ')
+    .replace(/\.\s*\./g, '.')
+    .trim();
 }
 
-function formatDistance(meters: number): string {
-  if (meters < 100) return `${Math.round(meters)} meters`;
-  if (meters < 1000) return `${Math.round(meters / 10) * 10} meters`;
-  return `${(meters / 1000).toFixed(1)} kilometers`;
+function decodePolyline(encoded: string): Coordinate[] {
+  const points: Coordinate[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let b: number;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+    result = 0;
+    shift = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+
+    points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+
+  return points;
 }
 
 export function distanceBetween(a: Coordinate, b: Coordinate): number {
