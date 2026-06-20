@@ -4,8 +4,12 @@ import { distanceBetween } from './navigation';
 
 const PLACES_TEXT_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
 const PLACES_NEARBY_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchNearby';
-const DEFAULT_RADIUS_M = 1500;
-const WIDE_RADIUS_M = 5000;
+// Category (nearby) searches — want the NEAREST matching place
+const NEARBY_RADIUS_M = 1500;
+const NEARBY_WIDE_RADIUS_M = 5000;
+// Text searches — need a large enough area to find any named place in the city
+const TEXT_RADIUS_M = 10_000;
+const TEXT_WIDE_RADIUS_M = 30_000;
 const MAX_RESULTS = 5;
 
 const GOOGLE_PLACES_API_KEY =
@@ -24,7 +28,9 @@ const CATEGORY_TYPES: Array<{ pattern: RegExp; type: string }> = [
   { pattern: /\b(hospital|emergency room|a and e|a&e)\b/i, type: 'hospital' },
   { pattern: /\b(doctor|gp|clinic)\b/i, type: 'doctor' },
   { pattern: /\b(bus stop|bus station)\b/i, type: 'bus_station' },
-  { pattern: /\b(train station|railway station|station)\b/i, type: 'train_station' },
+  // "station" alone is intentionally excluded — "Waterloo station" must use text search
+  // so the specific place name is found rather than the nearest generic train station.
+  { pattern: /\b(train station|railway station)\b/i, type: 'train_station' },
   { pattern: /\b(subway|tube|metro|underground)\b/i, type: 'subway_station' },
   { pattern: /\b(toilet|bathroom|restroom|loo)\b/i, type: 'public_bathroom' },
 ];
@@ -60,15 +66,15 @@ export async function findDestinationsNearMe(
   const category = CATEGORY_TYPES.find((item) => item.pattern.test(normalizedQuery));
 
   const places = category
-    ? await searchNearbyByType(category.type, currentLocation, DEFAULT_RADIUS_M)
-    : await searchTextNearLocation(normalizedQuery, currentLocation, DEFAULT_RADIUS_M);
+    ? await searchNearbyByType(category.type, currentLocation, NEARBY_RADIUS_M)
+    : await searchTextNearLocation(normalizedQuery, currentLocation, TEXT_RADIUS_M);
 
   const widerPlaces =
     places.length > 0
       ? places
       : category
-        ? await searchNearbyByType(category.type, currentLocation, WIDE_RADIUS_M)
-        : await searchTextNearLocation(normalizedQuery, currentLocation, WIDE_RADIUS_M);
+        ? await searchNearbyByType(category.type, currentLocation, NEARBY_WIDE_RADIUS_M)
+        : await searchTextNearLocation(normalizedQuery, currentLocation, TEXT_WIDE_RADIUS_M);
 
   return normalizePlaces(widerPlaces, currentLocation);
 }
@@ -97,10 +103,12 @@ async function searchTextNearLocation(
   origin: Coordinate,
   radiusMeters: number
 ): Promise<GooglePlace[]> {
+  // locationRestriction (not locationBias) so results are hard-limited to the circle.
+  // locationBias is only a preference and can return results from other countries.
   const response = await fetchPlaces(PLACES_TEXT_SEARCH_URL, {
     textQuery: query,
     maxResultCount: MAX_RESULTS,
-    locationBias: {
+    locationRestriction: {
       circle: {
         center: origin,
         radius: radiusMeters,
