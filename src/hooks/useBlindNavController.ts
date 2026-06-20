@@ -1,11 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
-import { findDestinationsNearMe, getCurrentCoordinate } from '../services/places';
-import { reverseGeocode } from '../services/geocoding';
+import { findDestinationsNearMe } from '../services/places';
 import { speechService } from '../services/speech';
 import { playTone } from '../services/tone';
 import { cancelListening, startListening, stopListeningAndSubmit } from '../services/voiceInput';
 import { getFavorites, getFavoritesCount } from '../store/favorites';
-import { appendLocationLogEntry } from '../store/locationLog';
 import type {
   AppMode,
   DestinationSearchResult,
@@ -136,23 +134,6 @@ export function useBlindNavController(cameraReady: boolean) {
     setActiveDestinationName(destination.name);
     clearDestinations();
     speechService.speakInfo(`Starting navigation to ${destination.name}`);
-
-    // Log asynchronously — don't block navigation on it
-    getCurrentCoordinate().then(async (userCoord) => {
-      if (!userCoord) return;
-      const userAddress = await reverseGeocode(userCoord);
-      appendLocationLogEntry({
-        timestamp: Date.now(),
-        userLocation: { coordinate: userCoord, address: userAddress },
-        destination: {
-          name: destination.name,
-          address: destination.address,
-          coordinate: destination.coordinate,
-        },
-        source: 'voice_search',
-      });
-    });
-
     await startNavigation(destination.coordinate);
   }, [clearDestinations, startNavigation]);
 
@@ -164,23 +145,6 @@ export function useBlindNavController(cameraReady: boolean) {
     setMode('navigate');
     setActiveDestinationName(fav.name);
     speechService.speakInfo(`Starting navigation to ${fav.name}`);
-
-    // Log asynchronously — don't block navigation on it
-    getCurrentCoordinate().then(async (userCoord) => {
-      if (!userCoord) return;
-      const userAddress = await reverseGeocode(userCoord);
-      appendLocationLogEntry({
-        timestamp: Date.now(),
-        userLocation: { coordinate: userCoord, address: userAddress },
-        destination: {
-          name: fav.name,
-          address: fav.address,
-          coordinate: fav.coordinate,
-        },
-        source: 'favorite',
-      });
-    });
-
     await startNavigation(fav.coordinate);
   }, [startNavigation]);
 
