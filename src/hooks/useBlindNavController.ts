@@ -1,10 +1,16 @@
 import { useCallback, useRef, useState } from 'react';
-import { findDestinationsNearMe } from '../services/places';
+import { findDestinationsNearMe, getCurrentCoordinate } from '../services/places';
+import { reverseGeocode } from '../services/geocoding';
 import { speechService } from '../services/speech';
 import { playTone } from '../services/tone';
 import { cancelListening, startListening, stopListeningAndSubmit } from '../services/voiceInput';
 import { getFavorites, getFavoritesCount } from '../store/favorites';
-import type { AppMode, DestinationSearchResult, GestureType } from '../types';
+import { appendLocationLogEntry } from '../store/locationLog';
+import type {
+  AppMode,
+  DestinationSearchResult,
+  GestureType,
+} from '../types';
 import { useNavigation } from './useNavigation';
 
 const GESTURE_LABELS: Record<GestureType, string> = {
@@ -22,6 +28,7 @@ export function useBlindNavController(cameraReady: boolean) {
   const [mode, setMode] = useState<AppMode>('explore');
   const [hazardDetectionEnabled, setHazardDetectionEnabled] = useState(true);
   const [lastGesture, setLastGesture] = useState<string | null>(null);
+  const [activeDestinationName, setActiveDestinationName] = useState<string | undefined>();
 
   const gestureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const favoritesIndex = useRef(0);
@@ -30,6 +37,7 @@ export function useBlindNavController(cameraReady: boolean) {
 
   const {
     isNavigating,
+    currentStep,
     currentInstruction,
     remainingDistance,
     startNavigation,
@@ -64,7 +72,8 @@ export function useBlindNavController(cameraReady: boolean) {
 
       pendingDestinations.current = destinations;
       destinationIndex.current = 0;
-      speechService.speakInfo(formatDestinationChoice(destinations[0], destinations.length));
+      setMode('select_destination');
+      speechService.speakInfo(formatDestinationChoice(destinations[0], 0, destinations.length));
     },
     [clearDestinations]
   );
@@ -99,10 +108,14 @@ export function useBlindNavController(cameraReady: boolean) {
       return;
     }
 
-    if (pendingDestinations.current.length > 0) {
+    if (mode === 'select_destination' && pendingDestinations.current.length > 0) {
       const destination = pendingDestinations.current[destinationIndex.current];
       speechService.speakInfo(
-        formatDestinationChoice(destination, pendingDestinations.current.length)
+        formatDestinationChoice(
+          destination,
+          destinationIndex.current,
+          pendingDestinations.current.length
+        )
       );
       return;
     }
@@ -120,8 +133,26 @@ export function useBlindNavController(cameraReady: boolean) {
     if (!destination) return;
 
     setMode('navigate');
+    setActiveDestinationName(destination.name);
     clearDestinations();
     speechService.speakInfo(`Starting navigation to ${destination.name}`);
+
+    // Log asynchronously — don't block navigation on it
+    getCurrentCoordinate().then(async (userCoord) => {
+      if (!userCoord) return;
+      const userAddress = await reverseGeocode(userCoord);
+      appendLocationLogEntry({
+        timestamp: Date.now(),
+        userLocation: { coordinate: userCoord, address: userAddress },
+        destination: {
+          name: destination.name,
+          address: destination.address,
+          coordinate: destination.coordinate,
+        },
+        source: 'voice_search',
+      });
+    });
+
     await startNavigation(destination.coordinate);
   }, [clearDestinations, startNavigation]);
 
@@ -131,7 +162,25 @@ export function useBlindNavController(cameraReady: boolean) {
 
     const fav = favorites[favoritesIndex.current % favorites.length];
     setMode('navigate');
+    setActiveDestinationName(fav.name);
     speechService.speakInfo(`Starting navigation to ${fav.name}`);
+
+    // Log asynchronously — don't block navigation on it
+    getCurrentCoordinate().then(async (userCoord) => {
+      if (!userCoord) return;
+      const userAddress = await reverseGeocode(userCoord);
+      appendLocationLogEntry({
+        timestamp: Date.now(),
+        userLocation: { coordinate: userCoord, address: userAddress },
+        destination: {
+          name: fav.name,
+          address: fav.address,
+          coordinate: fav.coordinate,
+        },
+        source: 'favorite',
+      });
+    });
+
     await startNavigation(fav.coordinate);
   }, [startNavigation]);
 
@@ -145,16 +194,35 @@ export function useBlindNavController(cameraReady: boolean) {
     speechService.speakInfo(`${fav.name}. Swipe right for next, double tap to navigate.`);
   }, []);
 
+  const speakDestinationChoice = useCallback(() => {
+    const destination = pendingDestinations.current[destinationIndex.current];
+    if (!destination) return;
+
+    speechService.speakInfo(
+      formatDestinationChoice(
+        destination,
+        destinationIndex.current,
+        pendingDestinations.current.length
+      )
+    );
+  }, []);
+
   const speakNextDestination = useCallback(() => {
     if (pendingDestinations.current.length === 0) return;
 
     destinationIndex.current =
       (destinationIndex.current + 1) % pendingDestinations.current.length;
-    const destination = pendingDestinations.current[destinationIndex.current];
-    speechService.speakInfo(
-      formatDestinationChoice(destination, pendingDestinations.current.length)
-    );
-  }, []);
+    speakDestinationChoice();
+  }, [speakDestinationChoice]);
+
+  const speakPreviousDestination = useCallback(() => {
+    if (pendingDestinations.current.length === 0) return;
+
+    destinationIndex.current =
+      (destinationIndex.current - 1 + pendingDestinations.current.length) %
+      pendingDestinations.current.length;
+    speakDestinationChoice();
+  }, [speakDestinationChoice]);
 
   const startDestinationInput = useCallback(async () => {
     setMode('destination');
@@ -198,8 +266,9 @@ export function useBlindNavController(cameraReady: boolean) {
             await stopListeningAndSubmit();
           } else if (isNavigating) {
             stopNavigation();
+            setActiveDestinationName(undefined);
             setMode('explore');
-          } else if (pendingDestinations.current.length > 0) {
+          } else if (mode === 'select_destination') {
             await startSelectedDestination();
           } else if (mode === 'favorites') {
             await startSelectedFavorite();
@@ -213,7 +282,7 @@ export function useBlindNavController(cameraReady: boolean) {
         case 'swipe_right':
           if (mode === 'favorites') {
             await speakNextFavorite();
-          } else if (pendingDestinations.current.length > 0) {
+          } else if (mode === 'select_destination') {
             speakNextDestination();
           } else {
             speechService.speakInfo('Confirmed');
@@ -228,24 +297,34 @@ export function useBlindNavController(cameraReady: boolean) {
             cancelListening();
             setMode('explore');
             speechService.speakInfo('Cancelled. Back to explore mode.');
-          } else if (pendingDestinations.current.length > 0) {
-            clearDestinations();
-            speechService.speakInfo('Destination cleared. Back to explore mode.');
+          } else if (mode === 'select_destination') {
+            speakPreviousDestination();
           } else {
             speechService.speakInfo('Cancelled');
           }
           break;
 
         case 'swipe_up':
+          clearDestinations();
           await startDestinationInput();
           break;
 
         case 'swipe_down':
-          await speakCurrentLocation();
+          if (mode === 'select_destination') {
+            speakDestinationChoice();
+          } else {
+            await speakCurrentLocation();
+          }
           break;
 
         case 'long_press':
-          await openFavorites();
+          if (mode === 'select_destination') {
+            clearDestinations();
+            setMode('explore');
+            speechService.speakInfo('Destination selection cancelled. Back to explore mode.');
+          } else {
+            await openFavorites();
+          }
           break;
 
         case 'two_finger_tap':
@@ -265,8 +344,10 @@ export function useBlindNavController(cameraReady: boolean) {
       openFavorites,
       speakCurrentContext,
       speakCurrentLocation,
+      speakDestinationChoice,
       speakNextDestination,
       speakNextFavorite,
+      speakPreviousDestination,
       startDestinationInput,
       startSelectedDestination,
       startSelectedFavorite,
@@ -274,12 +355,9 @@ export function useBlindNavController(cameraReady: boolean) {
     ]
   );
 
-  const hazardsActive = hazardDetectionEnabled && cameraReady && mode !== 'destination';
-
   return {
     mode,
     hazardDetectionEnabled,
-    hazardsActive,
     isNavigating,
     currentInstruction,
     remainingDistance,
@@ -290,6 +368,7 @@ export function useBlindNavController(cameraReady: boolean) {
 
 function formatDestinationChoice(
   destination: DestinationSearchResult,
+  selectedIndex: number,
   totalResults: number
 ): string {
   const distance = formatSpokenDistance(destination.distanceMeters);
@@ -297,7 +376,8 @@ function formatDestinationChoice(
     totalResults > 1 ? ' Swipe right for the next nearby result.' : '';
 
   return (
-    `Found ${destination.name}, ${distance} away. ` +
+    `Result ${selectedIndex + 1} of ${totalResults}. ` +
+    `${destination.name}, ${distance} away. ` +
     `${destination.address}. Double tap to start navigation.${moreResults}`
   );
 }

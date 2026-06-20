@@ -5,22 +5,60 @@ import {
   distanceBetween,
   bearingBetween,
   getDirectionFromBearing,
+  distanceToRoutePolyline,
+  buildStepToPolylineMap,
+  nearestPolylineIndex,
+  polylineDistanceFrom,
 } from '../services/navigation';
 import { speechService } from '../services/speech';
 import type { Coordinate, Route, RouteStep } from '../types';
 
-const WAYPOINT_THRESHOLD_M = 15; // meters to consider waypoint reached
-const REROUTE_THRESHOLD_M = 50; // meters off route before re-routing
+const WAYPOINT_THRESHOLD_M = 7;
+const POLYLINE_STEP_ADVANCE_THRESHOLD_M = 40;
+const ROUTE_WARNING_THRESHOLD_M = 15;
+const REROUTE_THRESHOLD_M = 30;
+const TURN_PROMPT_DISTANCES_M = [30, 15, 7];
+const ROUTE_WARNING_COOLDOWN_MS = 20_000;
+const WRONG_WAY_COOLDOWN_MS = 15_000;
+const WRONG_WAY_SCORE_FIRE = 6;
+const WRONG_WAY_SCORE_MAX = 12;
+const WRONG_WAY_ANGLE_STRONG = 120;
+const WRONG_WAY_ANGLE_MODERATE = 90;
+
+const POSITION_HISTORY_MAX = 8;
+const POSITION_MIN_SPACING_M = 1.5;
 
 interface UseNavigationResult {
   isNavigating: boolean;
   currentStep: RouteStep | null;
   currentInstruction: string;
   remainingDistance: number;
-  currentLocation: Coordinate | null;
   startNavigation: (destination: Coordinate) => Promise<void>;
   stopNavigation: () => void;
   speakCurrentLocation: () => Promise<void>;
+}
+
+function computeSmoothedBearing(positions: Coordinate[]): number | null {
+  if (positions.length < 2) return null;
+
+  let sinSum = 0;
+  let cosSum = 0;
+  let totalWeight = 0;
+
+  for (let i = 1; i < positions.length; i++) {
+    const dist = distanceBetween(positions[i - 1], positions[i]);
+    if (dist < 0.5) continue;
+    const bearing = bearingBetween(positions[i - 1], positions[i]);
+    const weight = i; // newer pairs weighted more
+    const rad = (bearing * Math.PI) / 180;
+    sinSum += Math.sin(rad) * weight;
+    cosSum += Math.cos(rad) * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight === 0) return null;
+  const meanRad = Math.atan2(sinSum / totalWeight, cosSum / totalWeight);
+  return ((meanRad * 180) / Math.PI + 360) % 360;
 }
 
 export function useNavigation(): UseNavigationResult {
@@ -28,23 +66,43 @@ export function useNavigation(): UseNavigationResult {
   const [currentStep, setCurrentStep] = useState<RouteStep | null>(null);
   const [currentInstruction, setCurrentInstruction] = useState('');
   const [remainingDistance, setRemainingDistance] = useState(0);
-  const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
 
   const routeRef = useRef<Route | null>(null);
   const stepIndexRef = useRef(0);
   const destinationRef = useRef<Coordinate | null>(null);
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
-  const headingSubRef = useRef<Location.LocationSubscription | null>(null);
-  const currentHeading = useRef(0);
+  const isNavigatingRef = useRef(false);
+  const currentLocationRef = useRef<Coordinate | null>(null);
+
+  const positionHistoryRef = useRef<Coordinate[]>([]);
+  const smoothTravelBearingRef = useRef<number | null>(null);
+  const stepPolylineMapRef = useRef<number[]>([]);
+  const currentPolylineIndexRef = useRef(0);
+
+  const wrongWayScoreRef = useRef(0);
+  const lastWrongWayWarningAtRef = useRef(0);
+  const spokenTurnPromptsRef = useRef<Set<string>>(new Set());
+  const lastRouteWarningAtRef = useRef(0);
+
+  // Ref to startNavigation so handleLocationUpdate can call it without circular deps
+  const startNavigationRef = useRef<(destination: Coordinate) => Promise<void>>(async () => {});
 
   const cleanup = useCallback(() => {
     locationSubRef.current?.remove();
-    headingSubRef.current?.remove();
     locationSubRef.current = null;
-    headingSubRef.current = null;
     routeRef.current = null;
     stepIndexRef.current = 0;
     destinationRef.current = null;
+    currentLocationRef.current = null;
+    isNavigatingRef.current = false;
+    positionHistoryRef.current = [];
+    smoothTravelBearingRef.current = null;
+    stepPolylineMapRef.current = [];
+    currentPolylineIndexRef.current = 0;
+    wrongWayScoreRef.current = 0;
+    lastWrongWayWarningAtRef.current = 0;
+    spokenTurnPromptsRef.current.clear();
+    lastRouteWarningAtRef.current = 0;
     setIsNavigating(false);
     setCurrentStep(null);
     setCurrentInstruction('');
@@ -65,57 +123,143 @@ export function useNavigation(): UseNavigationResult {
     const step = route.steps[stepIndexRef.current];
     setCurrentStep(step);
     setCurrentInstruction(step.instruction);
-    speechService.speakNavigation(step.instruction);
+    wrongWayScoreRef.current = 0;
+    spokenTurnPromptsRef.current.clear();
+    speechService.speakNavigation(formatGuidedInstruction(step, currentLocationRef.current));
   }, [cleanup]);
 
   const handleLocationUpdate = useCallback(
-    (location: Location.LocationObject) => {
+    async (location: Location.LocationObject) => {
+      if (!isNavigatingRef.current) return;
+
       const coord: Coordinate = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       };
-      setCurrentLocation(coord);
+      currentLocationRef.current = coord;
 
-      if (location.coords.heading != null && location.coords.heading >= 0) {
-        currentHeading.current = location.coords.heading;
+      // Maintain position history, filtering GPS noise
+      const history = positionHistoryRef.current;
+      const last = history.length > 0 ? history[history.length - 1] : null;
+      if (!last || distanceBetween(last, coord) >= POSITION_MIN_SPACING_M) {
+        history.push(coord);
+        if (history.length > POSITION_HISTORY_MAX) history.shift();
+        smoothTravelBearingRef.current = computeSmoothedBearing(history);
       }
 
-      if (!routeRef.current || !isNavigating) return;
-
       const route = routeRef.current;
+      if (!route) return;
+
       const stepIdx = stepIndexRef.current;
       const step = route.steps[stepIdx];
       if (!step) return;
 
-      // Check if we've reached the current waypoint
-      const distToWaypoint = distanceBetween(coord, step.coordinate);
-      setRemainingDistance(distToWaypoint);
+      // Track progress along polyline — never go backward
+      const nearestIdx = nearestPolylineIndex(coord, route.polyline);
+      if (nearestIdx > currentPolylineIndexRef.current) {
+        currentPolylineIndexRef.current = nearestIdx;
+      }
 
+      // Remaining = actual walking distance along polyline from current position
+      const remainingPolylineDist = polylineDistanceFrom(
+        currentPolylineIndexRef.current,
+        route.polyline
+      );
+      setRemainingDistance(remainingPolylineDist);
+
+      // Off-route detection with automatic reroute
+      const routeDeviation = distanceToRoutePolyline(coord, route.polyline);
+      if (
+        Number.isFinite(routeDeviation) &&
+        routeDeviation > REROUTE_THRESHOLD_M &&
+        destinationRef.current
+      ) {
+        speechService.speakWarning('Off route. Recalculating.');
+        await startNavigationRef.current(destinationRef.current);
+        return;
+      }
+
+      if (Number.isFinite(routeDeviation) && routeDeviation > ROUTE_WARNING_THRESHOLD_M) {
+        const now = Date.now();
+        if (now - lastRouteWarningAtRef.current > ROUTE_WARNING_COOLDOWN_MS) {
+          lastRouteWarningAtRef.current = now;
+          speechService.speakWarning('You may be drifting from the route.');
+        }
+      }
+
+      const distToWaypoint = distanceBetween(coord, step.coordinate);
+
+      // Primary step advance: physically within threshold of waypoint
       if (distToWaypoint < WAYPOINT_THRESHOLD_M) {
         advanceStep();
         return;
       }
 
-      // Check if user is off route
-      const nextStep =
-        stepIdx + 1 < route.steps.length ? route.steps[stepIdx + 1] : null;
-      if (nextStep) {
-        const distToNextWaypoint = distanceBetween(coord, nextStep.coordinate);
-        // If closer to next waypoint than current, skip ahead
-        if (distToNextWaypoint < distToWaypoint && distToNextWaypoint < WAYPOINT_THRESHOLD_M) {
-          stepIndexRef.current += 1;
-          advanceStep();
-          return;
+      // Secondary step advance: polyline progress has entered next step's zone
+      const nextStepPolylineIdx = stepPolylineMapRef.current[stepIdx + 1] ?? Infinity;
+      if (
+        currentPolylineIndexRef.current >= nextStepPolylineIdx &&
+        distToWaypoint < POLYLINE_STEP_ADVANCE_THRESHOLD_M
+      ) {
+        advanceStep();
+        return;
+      }
+
+      // Approach prompts at 30m, 15m, 7m
+      for (const promptDistance of TURN_PROMPT_DISTANCES_M) {
+        const key = `${stepIdx}:${promptDistance}`;
+        if (
+          distToWaypoint <= promptDistance &&
+          distToWaypoint > WAYPOINT_THRESHOLD_M &&
+          !spokenTurnPromptsRef.current.has(key)
+        ) {
+          spokenTurnPromptsRef.current.add(key);
+          const bearing = bearingBetween(coord, step.coordinate);
+          const smoothBearing = smoothTravelBearingRef.current;
+          const direction =
+            smoothBearing !== null
+              ? getDirectionFromBearing(bearing, smoothBearing)
+              : bearingToCardinalDirection(bearing);
+          const distText = promptDistance === 7 ? 'now' : `in about ${promptDistance} meters`;
+          speechService.speakNavigation(
+            `${formatGuidedInstruction(step, coord)} The waypoint is ${direction}, ${distText}.`
+          );
+          break;
         }
       }
 
-      // If too far off route, reroute
-      if (distToWaypoint > REROUTE_THRESHOLD_M && destinationRef.current) {
-        speechService.speakWarning('You seem to be off route. Recalculating.');
-        startNavigation(destinationRef.current);
+      // Wrong-way detection using smoothed multi-sample travel bearing
+      const smoothBearing = smoothTravelBearingRef.current;
+      if (smoothBearing !== null) {
+        const requiredBearing = bearingBetween(coord, step.coordinate);
+        const angleDiff = Math.abs(((smoothBearing - requiredBearing + 540) % 360) - 180);
+
+        if (angleDiff > WRONG_WAY_ANGLE_STRONG) {
+          wrongWayScoreRef.current = Math.min(
+            wrongWayScoreRef.current + 3,
+            WRONG_WAY_SCORE_MAX
+          );
+        } else if (angleDiff > WRONG_WAY_ANGLE_MODERATE) {
+          wrongWayScoreRef.current = Math.min(
+            wrongWayScoreRef.current + 1,
+            WRONG_WAY_SCORE_MAX
+          );
+        } else if (angleDiff < 60) {
+          wrongWayScoreRef.current = Math.max(0, wrongWayScoreRef.current - 2);
+        }
+
+        if (
+          wrongWayScoreRef.current >= WRONG_WAY_SCORE_FIRE &&
+          Date.now() - lastWrongWayWarningAtRef.current >= WRONG_WAY_COOLDOWN_MS
+        ) {
+          lastWrongWayWarningAtRef.current = Date.now();
+          wrongWayScoreRef.current = 0;
+          const direction = getDirectionFromBearing(requiredBearing, smoothBearing);
+          speechService.speakNavigation(buildWrongWayMessage(direction));
+        }
       }
     },
-    [isNavigating, advanceStep]
+    [advanceStep]
   );
 
   const startNavigation = useCallback(
@@ -124,7 +268,7 @@ export function useNavigation(): UseNavigationResult {
 
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        speechService.speakImmediate('Location permission is required for navigation.');
+        speechService.speakImmediate('Location permission required for navigation.');
         return;
       }
 
@@ -135,7 +279,8 @@ export function useNavigation(): UseNavigationResult {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       };
-      setCurrentLocation(origin);
+      currentLocationRef.current = origin;
+      positionHistoryRef.current = [origin];
 
       speechService.speakInfo('Calculating route. Please wait.');
 
@@ -148,6 +293,9 @@ export function useNavigation(): UseNavigationResult {
       routeRef.current = route;
       destinationRef.current = destination;
       stepIndexRef.current = 0;
+      stepPolylineMapRef.current = buildStepToPolylineMap(route.steps, route.polyline);
+      currentPolylineIndexRef.current = 0;
+      isNavigatingRef.current = true;
 
       const totalDistText =
         route.totalDistance < 1000
@@ -162,25 +310,29 @@ export function useNavigation(): UseNavigationResult {
       const firstStep = route.steps[0];
       setCurrentStep(firstStep);
       setCurrentInstruction(firstStep.instruction);
+      setRemainingDistance(route.totalDistance);
       setIsNavigating(true);
 
-      // Delay first instruction slightly
       setTimeout(() => {
-        speechService.speakNavigation(firstStep.instruction);
+        speechService.speakNavigation(formatGuidedInstruction(firstStep, origin));
       }, 2000);
 
-      // Start GPS tracking
       locationSubRef.current = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.BestForNavigation,
-          distanceInterval: 5,
-          timeInterval: 2000,
+          distanceInterval: 1,
+          timeInterval: 1000,
         },
         handleLocationUpdate
       );
     },
     [cleanup, handleLocationUpdate]
   );
+
+  // Keep startNavigationRef in sync so handleLocationUpdate can call it
+  useEffect(() => {
+    startNavigationRef.current = startNavigation;
+  }, [startNavigation]);
 
   const stopNavigation = useCallback(() => {
     speechService.speakInfo('Navigation stopped.');
@@ -212,7 +364,6 @@ export function useNavigation(): UseNavigationResult {
   useEffect(() => {
     return () => {
       locationSubRef.current?.remove();
-      headingSubRef.current?.remove();
     };
   }, []);
 
@@ -221,9 +372,45 @@ export function useNavigation(): UseNavigationResult {
     currentStep,
     currentInstruction,
     remainingDistance,
-    currentLocation,
     startNavigation,
     stopNavigation,
     speakCurrentLocation,
   };
+}
+
+function formatGuidedInstruction(step: RouteStep, current: Coordinate | null): string {
+  if (!current) return step.instruction;
+
+  const bearing = bearingBetween(current, step.coordinate);
+  const cardinalDirection = bearingToCardinalDirection(bearing);
+
+  if (/continue/i.test(step.instruction)) {
+    return `${step.instruction} Head ${cardinalDirection}.`;
+  }
+
+  if (/start walking/i.test(step.instruction)) {
+    return `${step.instruction} Start by heading ${cardinalDirection}.`;
+  }
+
+  return step.instruction;
+}
+
+function buildWrongWayMessage(direction: string): string {
+  if (direction === 'behind you') return 'Wrong way. Turn around.';
+  if (direction === 'to your right') return 'Wrong way. Turn right.';
+  if (direction === 'to your left') return 'Wrong way. Turn left.';
+  if (direction === 'slightly right') return 'Wrong way. Bear right.';
+  if (direction === 'slightly left') return 'Wrong way. Bear left.';
+  return `Wrong way. The route is ${direction}.`;
+}
+
+function bearingToCardinalDirection(bearing: number): string {
+  if (bearing >= 337.5 || bearing < 22.5) return 'north';
+  if (bearing < 67.5) return 'northeast';
+  if (bearing < 112.5) return 'east';
+  if (bearing < 157.5) return 'southeast';
+  if (bearing < 202.5) return 'south';
+  if (bearing < 247.5) return 'southwest';
+  if (bearing < 292.5) return 'west';
+  return 'northwest';
 }

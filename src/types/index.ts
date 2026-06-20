@@ -1,4 +1,4 @@
-export type AppMode = 'explore' | 'navigate' | 'destination' | 'favorites';
+export type AppMode = 'explore' | 'navigate' | 'destination' | 'select_destination' | 'favorites';
 
 export type TTSPriority = 'critical' | 'warning' | 'navigation' | 'info';
 

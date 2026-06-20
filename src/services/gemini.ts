@@ -8,19 +8,20 @@ const google = createGoogleGenerativeAI({
 
 const model = google('gemini-3.1-flash-lite');
 
-const HAZARD_PROMPT = `You are a navigation assistant for a blind person. Analyze this camera image and identify:
+const HAZARD_PROMPT = `You are a navigation assistant for a blind pedestrian.
+This scan is visual-only and must not create general caution chatter.
 
-1. CRITICAL hazards requiring immediate action (approaching vehicles, open holes, low-hanging obstacles at head height)
-2. WARNING hazards nearby (stairs, curbs, construction, uneven ground, wet surfaces)
-3. INFO observations about the environment (open spaces, doors, narrow passages, landmarks)
+Identify ONLY route-relevant, immediately actionable blockers in the user's walking path:
+1. CRITICAL hazards requiring the user to stop now, such as a moving vehicle in path, open hole, or head-height obstacle directly ahead.
+2. WARNING hazards only when they block or change the walking path, such as stairs/curb/construction directly ahead.
 
 Respond ONLY with a JSON array. Each item must have:
 - "tag": a short stable snake_case identifier for this hazard combining the object and direction, e.g. "car_left", "stairs_ahead", "curb_right", "pole_center", "wet_floor_ahead", "door_left". Use the SAME tag if the same hazard appears in multiple frames.
 - "description": brief, spoken-friendly description (e.g., "Car approaching from your left")
-- "severity": "critical", "warning", or "info"
+- "severity": "critical" or "warning"
 
-Keep descriptions concise and directional (use clock positions or left/right/ahead).
-If the scene is clear and safe, return an empty array [].
+Do not mention parked cars, distant objects, background scenery, landmarks, or generic caution.
+If there is no direct blocker in the walking path, return [].
 Do NOT include markdown formatting or code blocks. Return raw JSON only.`;
 
 export async function analyzeFrame(base64Image: string): Promise<HazardReport[]> {
@@ -28,6 +29,9 @@ export async function analyzeFrame(base64Image: string): Promise<HazardReport[]>
     console.warn('Gemini API key not set');
     return [];
   }
+
+  const cleanBase64 = base64Image.replace(/[\s\r\n]/g, '');
+  if (!cleanBase64) return [];
 
   try {
     const { text } = await generateText({
@@ -39,7 +43,7 @@ export async function analyzeFrame(base64Image: string): Promise<HazardReport[]>
             { type: 'text', text: HAZARD_PROMPT },
             {
               type: 'image',
-              image: `data:image/jpeg;base64,${base64Image}`,
+              image: `data:image/jpeg;base64,${cleanBase64}`,
             },
           ],
         },

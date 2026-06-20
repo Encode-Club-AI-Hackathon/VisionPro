@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import type { AppMode, HazardReport } from '../types';
+import type { AppMode } from '../types';
 
 interface StatusBarProps {
   mode: AppMode;
@@ -8,7 +8,6 @@ interface StatusBarProps {
   isNavigating: boolean;
   currentInstruction?: string;
   remainingDistance?: number;
-  lastHazards?: HazardReport[];
   lastGesture?: string;
 }
 
@@ -16,6 +15,7 @@ const MODE_LABELS: Record<AppMode, string> = {
   explore: 'EXPLORE',
   navigate: 'NAVIGATING',
   destination: 'SET DESTINATION',
+  select_destination: 'CHOOSE PLACE',
   favorites: 'FAVORITES',
 };
 
@@ -23,19 +23,8 @@ const MODE_COLORS: Record<AppMode, string> = {
   explore: '#2980b9',
   navigate: '#27ae60',
   destination: '#8e44ad',
+  select_destination: '#d35400',
   favorites: '#f39c12',
-};
-
-const SEVERITY_COLORS: Record<string, string> = {
-  critical: '#e74c3c',
-  warning: '#f39c12',
-  info: '#3498db',
-};
-
-const SEVERITY_LABELS: Record<string, string> = {
-  critical: 'DANGER',
-  warning: 'CAUTION',
-  info: 'INFO',
 };
 
 function formatDistance(meters: number): string {
@@ -61,6 +50,12 @@ const GESTURE_HINTS: Record<AppMode, string[]> = {
     'DOUBLE TAP = Done',
     'SWIPE LEFT = Cancel',
   ],
+  select_destination: [
+    'SWIPE RIGHT = Next',
+    'SWIPE LEFT = Previous',
+    'DOUBLE TAP = Choose',
+    'HOLD = Cancel',
+  ],
   favorites: [
     'SWIPE RIGHT = Next',
     'DOUBLE TAP = Go',
@@ -74,11 +69,8 @@ export default function StatusBar({
   isNavigating,
   currentInstruction,
   remainingDistance,
-  lastHazards,
   lastGesture,
 }: StatusBarProps) {
-  const recentHazards = (lastHazards ?? []).slice(0, 3);
-
   return (
     <View style={styles.container} pointerEvents="none">
       {/* Top: Mode + status badges */}
@@ -106,31 +98,6 @@ export default function StatusBar({
           <Text style={styles.instructionText}>{currentInstruction}</Text>
         </View>
       ) : null}
-
-      {/* Hazard alerts */}
-      {recentHazards.length > 0 && (
-        <View style={styles.hazardContainer}>
-          {recentHazards.map((h, i) => (
-            <View
-              key={`${h.timestamp}-${i}`}
-              style={[
-                styles.hazardCard,
-                { borderLeftColor: SEVERITY_COLORS[h.severity] ?? '#3498db' },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.hazardSeverity,
-                  { color: SEVERITY_COLORS[h.severity] ?? '#3498db' },
-                ]}
-              >
-                {SEVERITY_LABELS[h.severity] ?? 'INFO'}
-              </Text>
-              <Text style={styles.hazardText}>{h.description}</Text>
-            </View>
-          ))}
-        </View>
-      )}
 
       {/* Last gesture feedback */}
       {lastGesture ? (
@@ -212,31 +179,6 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     lineHeight: 28,
-  },
-
-  // Hazard cards
-  hazardContainer: {
-    marginHorizontal: 16,
-    marginTop: 10,
-    gap: 6,
-  },
-  hazardCard: {
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    borderRadius: 10,
-    borderLeftWidth: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  hazardSeverity: {
-    fontSize: 13,
-    fontWeight: '900',
-    letterSpacing: 1,
-    marginBottom: 2,
-  },
-  hazardText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
   },
 
   // Gesture feedback flash

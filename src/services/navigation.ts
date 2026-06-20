@@ -134,6 +134,73 @@ export function getDirectionFromBearing(bearing: number, heading: number): strin
   return 'slightly left';
 }
 
+export function distanceToRoutePolyline(
+  point: Coordinate,
+  polyline: Coordinate[]
+): number {
+  if (polyline.length === 0) return Infinity;
+  if (polyline.length === 1) return distanceBetween(point, polyline[0]);
+
+  let closest = Infinity;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const distance = distanceToSegment(point, polyline[i], polyline[i + 1]);
+    if (distance < closest) closest = distance;
+  }
+
+  return closest;
+}
+
+export function buildStepToPolylineMap(steps: RouteStep[], polyline: Coordinate[]): number[] {
+  return steps.map((step) => nearestPolylineIndex(step.coordinate, polyline));
+}
+
+export function nearestPolylineIndex(point: Coordinate, polyline: Coordinate[]): number {
+  let bestIndex = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < polyline.length; i++) {
+    const d = distanceBetween(point, polyline[i]);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+export function polylineDistanceFrom(startIndex: number, polyline: Coordinate[]): number {
+  let total = 0;
+  for (let i = startIndex; i < polyline.length - 1; i++) {
+    total += distanceBetween(polyline[i], polyline[i + 1]);
+  }
+  return total;
+}
+
+function distanceToSegment(point: Coordinate, start: Coordinate, end: Coordinate): number {
+  const originLat = toRad(point.latitude);
+  const metersPerLat = 111_320;
+  const metersPerLon = 111_320 * Math.cos(originLat);
+
+  const px = point.longitude * metersPerLon;
+  const py = point.latitude * metersPerLat;
+  const sx = start.longitude * metersPerLon;
+  const sy = start.latitude * metersPerLat;
+  const ex = end.longitude * metersPerLon;
+  const ey = end.latitude * metersPerLat;
+
+  const dx = ex - sx;
+  const dy = ey - sy;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq === 0) return distanceBetween(point, start);
+
+  const t = Math.max(0, Math.min(1, ((px - sx) * dx + (py - sy) * dy) / lengthSq));
+  const closest = {
+    longitude: (sx + t * dx) / metersPerLon,
+    latitude: (sy + t * dy) / metersPerLat,
+  };
+
+  return distanceBetween(point, closest);
+}
+
 function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
 }

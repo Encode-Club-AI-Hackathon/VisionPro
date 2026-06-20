@@ -4,7 +4,6 @@ import { CameraView } from 'expo-camera';
 import GestureOverlay from '../components/GestureOverlay';
 import StatusBar from '../components/StatusBar';
 import { useBlindNavController } from '../hooks/useBlindNavController';
-import { useHazardDetection } from '../hooks/useHazardDetection';
 
 export default function MainScreen() {
   const cameraRef = useRef<InstanceType<typeof CameraView>>(null);
@@ -12,14 +11,12 @@ export default function MainScreen() {
   const {
     mode,
     hazardDetectionEnabled,
-    hazardsActive,
     isNavigating,
     currentInstruction,
     remainingDistance,
     lastGesture,
     handleGesture,
   } = useBlindNavController(cameraReady);
-  const { lastHazards } = useHazardDetection(cameraRef, hazardsActive);
 
   return (
     <View style={styles.container}>
@@ -36,7 +33,6 @@ export default function MainScreen() {
         isNavigating={isNavigating}
         currentInstruction={currentInstruction}
         remainingDistance={remainingDistance}
-        lastHazards={lastHazards}
         lastGesture={lastGesture ?? undefined}
       />
 

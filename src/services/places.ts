@@ -73,7 +73,7 @@ export async function findDestinationsNearMe(
   return normalizePlaces(widerPlaces, currentLocation);
 }
 
-async function getCurrentCoordinate(): Promise<Coordinate | null> {
+export async function getCurrentCoordinate(): Promise<Coordinate | null> {
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return null;

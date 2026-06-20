@@ -1,183 +1,176 @@
 import * as Speech from 'expo-speech';
 import { Audio } from 'expo-av';
-import type { TTSMessage, TTSPriority } from '../types';
+import type { TTSMessage } from '../types';
 
-const PRIORITY_RANK: Record<TTSPriority, number> = {
-  critical: 0,
-  warning: 1,
-  navigation: 2,
-  info: 3,
-};
-
-// Pause (ms) after speaking a message before starting the next one.
-// Higher priority = shorter pause so urgent info flows faster.
-const PAUSE_AFTER: Record<TTSPriority, number> = {
-  critical: 400,
-  warning: 800,
-  navigation: 1200,
-  info: 1500,
-};
-
-const MAX_QUEUE_SIZE = 6;
+const MIN_NAV_REPEAT_MS = 5_000;
+const MIN_PROMPT_REPEAT_MS = 2_000;
+const MAX_QUEUE_SIZE = 3;
 let playbackRouteReset: Promise<void> | null = null;
 
+interface SpeechItem {
+  text: string;
+  urgent: boolean;
+  createdAt: number;
+}
+
+class NavigationSpeechQueue {
+  private items: SpeechItem[] = [];
+
+  push(item: SpeechItem): void {
+    if (this.items.some((queued) => queued.text === item.text)) return;
+
+    if (item.urgent) {
+      this.items.unshift(item);
+    } else {
+      this.items.push(item);
+    }
+
+    while (this.items.length > MAX_QUEUE_SIZE) {
+      this.items.pop();
+    }
+  }
+
+  shift(): SpeechItem | null {
+    return this.items.shift() ?? null;
+  }
+
+  clear(): void {
+    this.items = [];
+  }
+
+  get length(): number {
+    return this.items.length;
+  }
+}
+
 class SpeechService {
-  private queue: TTSMessage[] = [];
+  private queue = new NavigationSpeechQueue();
   private isSpeaking = false;
-  private currentPriority: TTSPriority | null = null;
   private currentText: string | null = null;
-  private pauseTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastNavigationText: string | null = null;
+  private lastNavigationAt = 0;
+  private lastPromptAt = 0;
 
   async speak(message: TTSMessage): Promise<void> {
-    // Don't queue exact duplicate text
-    if (this.currentText === message.text) return;
-    if (this.queue.some((m) => m.text === message.text)) return;
-
     if (message.priority === 'critical') {
-      // Critical: interrupt, re-queue interrupted message, then play
-      const interrupted = this.captureInterrupted();
-      await this.interruptInternal();
-      this.queue.unshift(message);
-      // Put the interrupted message back after the critical one
-      if (interrupted) {
-        this.insertByPriority(interrupted);
-      }
-    } else if (
-      message.priority === 'warning' &&
-      this.isSpeaking &&
-      this.currentPriority != null &&
-      PRIORITY_RANK[this.currentPriority] > PRIORITY_RANK['warning']
-    ) {
-      // Warning interrupts lower-priority speech, re-queues interrupted
-      const interrupted = this.captureInterrupted();
-      await this.interruptInternal();
-      this.queue.unshift(message);
-      if (interrupted) {
-        this.insertByPriority(interrupted);
-      }
-    } else {
-      this.insertByPriority(message);
+      await this.speakImmediate(message.text);
+      return;
     }
 
-    this.trimQueue();
-
-    if (!this.isSpeaking) {
-      this.processQueue();
+    if (message.priority === 'navigation') {
+      await this.speakNavigation(message.text);
+      return;
     }
-  }
 
-  private insertByPriority(message: TTSMessage): void {
-    // Don't re-insert duplicates
-    if (this.queue.some((m) => m.text === message.text)) return;
-
-    const rank = PRIORITY_RANK[message.priority];
-    let insertAt = this.queue.length;
-    for (let i = 0; i < this.queue.length; i++) {
-      if (PRIORITY_RANK[this.queue[i].priority] > rank) {
-        insertAt = i;
-        break;
-      }
+    if (message.priority === 'warning') {
+      await this.speakWarning(message.text);
+      return;
     }
-    this.queue.splice(insertAt, 0, message);
-  }
 
-  /** Capture what's currently being spoken so it can be re-queued. */
-  private captureInterrupted(): TTSMessage | null {
-    if (!this.isSpeaking || !this.currentText || !this.currentPriority) return null;
-    return { text: this.currentText, priority: this.currentPriority };
+    await this.speakInfo(message.text);
   }
 
   async speakImmediate(text: string): Promise<void> {
-    await this.speak({ text, priority: 'critical' });
+    await this.interrupt();
+    this.queue.push({ text, urgent: true, createdAt: Date.now() });
+    this.processQueue().catch(() => {});
   }
 
   async speakWarning(text: string): Promise<void> {
-    await this.speak({ text, priority: 'warning' });
+    await this.enqueue(text, true);
   }
 
   async speakNavigation(text: string): Promise<void> {
-    await this.speak({ text, priority: 'navigation' });
+    const now = Date.now();
+    if (
+      this.lastNavigationText === text &&
+      now - this.lastNavigationAt < MIN_NAV_REPEAT_MS
+    ) {
+      return;
+    }
+
+    this.lastNavigationText = text;
+    this.lastNavigationAt = now;
+    await this.enqueue(text, false);
   }
 
   async speakInfo(text: string): Promise<void> {
-    await this.speak({ text, priority: 'info' });
+    const now = Date.now();
+    if (now - this.lastPromptAt < MIN_PROMPT_REPEAT_MS) return;
+
+    this.lastPromptAt = now;
+    await this.enqueue(text, false);
   }
 
-  private trimQueue(): void {
-    while (this.queue.length > MAX_QUEUE_SIZE) {
-      this.queue.pop();
+  private async enqueue(text: string, urgent: boolean): Promise<void> {
+    if (this.currentText === text) return;
+
+    this.queue.push({ text, urgent, createdAt: Date.now() });
+
+    if (urgent && this.isSpeaking) {
+      await this.interrupt();
+    }
+
+    if (!this.isSpeaking) {
+      this.processQueue().catch(() => {});
     }
   }
 
   private async processQueue(): Promise<void> {
-    if (this.queue.length === 0) {
+    const item = this.queue.shift();
+    if (!item) {
       this.isSpeaking = false;
-      this.currentPriority = null;
       this.currentText = null;
       return;
     }
 
     this.isSpeaking = true;
-    const message = this.queue.shift()!;
-    this.currentPriority = message.priority;
-    this.currentText = message.text;
+    this.currentText = item.text;
 
     await configurePlaybackAudioMode();
 
-    Speech.speak(message.text, {
+    Speech.speak(item.text, {
       language: 'en-US',
       rate: 0.95,
       onDone: () => {
-        // Pause before next message so the user can absorb what was said
-        const pause = PAUSE_AFTER[message.priority];
-        this.pauseTimer = setTimeout(() => {
-          this.pauseTimer = null;
-          this.processQueue().catch(() => {});
-        }, pause);
+        this.currentText = null;
+        this.processQueue().catch(() => {});
       },
       onError: () => {
+        this.currentText = null;
         this.processQueue().catch(() => {});
       },
       onStopped: () => {
-        // Stopped via interrupt — don't continue, the interrupter handles it
         this.isSpeaking = false;
-        this.currentPriority = null;
         this.currentText = null;
       },
     });
   }
 
-  /** Interrupt without clearing state — used internally before re-queuing. */
-  private async interruptInternal(): Promise<void> {
-    if (this.pauseTimer) {
-      clearTimeout(this.pauseTimer);
-      this.pauseTimer = null;
-    }
+  async interrupt(): Promise<void> {
     await Speech.stop();
     this.isSpeaking = false;
-    this.currentPriority = null;
     this.currentText = null;
   }
 
-  /** Public interrupt — stops speech and clears interrupted message (gesture use). */
-  async interrupt(): Promise<void> {
-    await this.interruptInternal();
-  }
-
   clearQueue(): void {
-    this.queue = [];
+    this.queue.clear();
   }
 
   clearNonCritical(): void {
-    this.queue = this.queue.filter((m) => m.priority === 'critical');
+    this.queue.clear();
   }
 
   clearInfo(): void {
-    this.queue = this.queue.filter((m) => m.priority !== 'info');
+    this.queue.clear();
+  }
+
+  canSpeakNavigation(): boolean {
+    return !this.isSpeaking && this.queue.length === 0;
   }
 
   get busy(): boolean {
-    return this.isSpeaking || this.queue.length > 0 || this.pauseTimer != null;
+    return this.isSpeaking || this.queue.length > 0;
   }
 
   get queueLength(): number {
@@ -186,6 +179,7 @@ class SpeechService {
 
   async waitUntilIdle(): Promise<void> {
     if (!this.busy) return;
+
     return new Promise((resolve) => {
       const check = () => {
         if (!this.busy) {
