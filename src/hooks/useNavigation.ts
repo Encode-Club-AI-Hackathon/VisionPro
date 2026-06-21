@@ -311,9 +311,7 @@ export function useNavigation(): UseNavigationResult {
           lastWrongWayWarningAtRef.current = Date.now();
           wrongWayScoreRef.current = 0;
           const direction = getDirectionFromBearing(requiredBearing, smoothBearing);
-          // Clear pending messages and interrupt current speech so wrong-way fires immediately
-          speechService.clearQueue();
-          speechService.speakImmediate(buildWrongWayMessage(direction, step.instruction));
+          speechService.speakWarning(buildWrongWayMessage(direction, step.instruction));
         }
       }
 
