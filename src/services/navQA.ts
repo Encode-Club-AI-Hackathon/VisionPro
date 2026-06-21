@@ -19,7 +19,7 @@ export async function answerNavigationQuestion(
   const contentParts: any[] = [];
 
   // System instructions + question
-  let systemText = `You are a navigation assistant for a blind pedestrian. Answer in 1–3 short sentences suitable for text-to-speech. Be direct and specific.`;
+  let systemText = `You are a navigation assistant for a blind pedestrian. Answer in 1–3 short sentences suitable for text-to-speech. Be direct and specific. You must always provide an answer — never return an empty response. If you are uncertain, give your best assessment based on the available context.`;
 
   if (ctx.route) {
     const steps = ctx.route.steps.map((s, i) => `${i + 1}. ${s.instruction}`).join('\n');
@@ -39,12 +39,10 @@ export async function answerNavigationQuestion(
     systemText += `\n\nRecent GPS positions (oldest→newest): ${pts}`;
   }
 
-  contentParts.push({ type: 'text', text: systemText });
-  contentParts.push({ type: 'text', text: `Question: "${question}"` });
+  // Single text part — two separate text parts break LiteLLM's Gemini translation
+  contentParts.push({ type: 'text', text: `${systemText}\n\nQuestion: "${question}"` });
 
   // Only attach the camera image for questions about the visual environment.
-  // Navigation/direction questions are answered from route + GPS alone — attaching
-  // an image (potentially indoors or unrelated) causes the model to return empty.
   const lastImage = ctx.images[ctx.images.length - 1];
   if (lastImage && isVisualQuestion(question)) {
     contentParts.push({ type: 'image', image: `data:image/jpeg;base64,${lastImage}` });
@@ -57,11 +55,13 @@ export async function answerNavigationQuestion(
     maxOutputTokens: 256,
   });
 
+  console.log('[navQA] raw answer length:', answer.length, 'first 100:', answer.slice(0, 100));
+
   const trimmed = answer.trim();
   if (!trimmed) return 'I was unable to form a response. Please try again.';
   return trimmed;
 }
 
 function isVisualQuestion(q: string): boolean {
-  return /\b(see|seeing|look|visible|front|behind|around|describe|what.s there|what is there|color|sign|building|door|road|path|scene|surroundings|environment|obstacle|near me|beside|next to)\b/i.test(q);
+  return /\b(see|seeing|look|visible|front|behind|around|describe|what.s there|what is there|color|sign|building|door|road|path|scene|surroundings|environment|obstacle|near me|beside|next to|safe|safety|clear|blocked|ahead|move|walk|proceed|step|cross|crossing|pass|through|enter|exit|open|close)\b/i.test(q);
 }

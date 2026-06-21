@@ -39,12 +39,13 @@ export default function MainScreen() {
       seenTagsRef.current.set(hazard.tag, now);
 
       if (hazard.severity === 'critical') {
-        speechService.speakImmediate(hazard.description);
+        const suffix = mode === 'select_destination' ? ' Tap for options.' : '';
+        speechService.speakImmediate(hazard.description + suffix);
       } else if (!isNavigating) {
         speechService.speakWarning(hazard.description);
       }
     }
-  }, [lastHazards]);
+  }, [lastHazards, isNavigating, mode]);
 
   return (
     <View style={styles.container}>

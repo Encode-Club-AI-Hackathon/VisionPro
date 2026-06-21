@@ -75,7 +75,7 @@ For users with partial vision, a high-contrast visual HUD overlays the camera fe
 | **Swipe right** | Next result |
 | **Swipe left** | Previous result |
 | **Double tap** | Start navigation to selected destination |
-| **Long press** | Cancel selection |
+| **Long press** | Repeat the current option |
 
 ### Asking a question (during navigation)
 

@@ -153,7 +153,7 @@ export function useBlindNavController(cameraReady: boolean) {
     if (mode === 'select_destination' && pendingDestinations.current.length > 0) {
       const destination = pendingDestinations.current[destinationIndex.current];
       speechService.speakInfo(
-        `${formatDestinationChoice(destination, destinationIndex.current, pendingDestinations.current.length)} Swipe right for next. Swipe left for previous. Double tap to start. Long press to cancel.`
+        `${formatDestinationChoice(destination, destinationIndex.current, pendingDestinations.current.length)} Swipe right for next. Swipe left for previous. Double tap to start. Hold to repeat.`
       );
       return;
     }
@@ -340,12 +340,10 @@ export function useBlindNavController(cameraReady: boolean) {
           break;
 
         case 'long_press':
-          if (mode === 'select_destination') {
-            clearDestinations();
-            setMode('explore');
-            speechService.speakInfo('Destination selection cancelled. Back to explore mode.');
-          } else if (isNavigating) {
+          if (isNavigating) {
             await startNavigationQuestion();
+          } else if (mode === 'select_destination') {
+            speakDestinationChoice();
           } else {
             await openFavorites();
           }
