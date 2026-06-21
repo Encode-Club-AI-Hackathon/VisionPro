@@ -12,21 +12,34 @@ const flock = createOpenAICompatible({
 
 const model = flock('gemini-3-flash-preview');
 
-const HAZARD_PROMPT = `You are a navigation assistant for a blind pedestrian.
-This scan is visual-only and must not create general caution chatter.
+const HAZARD_PROMPT = `You are a hazard detection assistant for a blind pedestrian. Describe anything in front of them that they need to know about to walk safely.
 
-Identify ONLY route-relevant, immediately actionable blockers in the user's walking path:
-1. CRITICAL hazards requiring the user to stop now, such as a moving vehicle in path, open hole, or head-height obstacle directly ahead.
-2. WARNING hazards only when they block or change the walking path, such as stairs/curb/construction directly ahead.
+Report hazards at two severity levels:
 
-Respond ONLY with a JSON array. Each item must have:
-- "tag": a short stable snake_case identifier for this hazard combining the object and direction, e.g. "car_left", "stairs_ahead", "curb_right", "pole_center", "wet_floor_ahead", "door_left". Use the SAME tag if the same hazard appears in multiple frames.
-- "description": brief, spoken-friendly description (e.g., "Car approaching from your left")
+CRITICAL — stop immediately:
+- Moving vehicle, cyclist, or scooter crossing or approaching their path
+- Open hole, drop, or missing paving
+- Obstacle at head or chest height (sign, branch, scaffolding bar)
+
+WARNING — slow down or steer around:
+- Steps, kerb drop, or ramp ahead or to either side
+- Person or group of people in the path
+- Bollard, bin, bench, or street furniture in the path
+- Construction barrier, cone, or scaffolding
+- Bicycle or scooter parked across the path
+- Puddle, wet surface, or slippery area
+- Narrow gap or pinch point ahead
+- Door opening into the path
+- Uneven or broken paving directly ahead
+
+Respond ONLY with a JSON array. Each item:
+- "tag": stable snake_case identifier combining object + position, e.g. "steps_ahead", "person_left", "bollard_right", "puddle_ahead", "car_crossing". Reuse the same tag across frames for the same hazard.
+- "description": short, plain spoken phrase (under 10 words), e.g. "Steps ahead", "Person blocking path", "Bollard on your right"
 - "severity": "critical" or "warning"
 
-Do not mention parked cars, distant objects, background scenery, landmarks, or generic caution.
-If there is no direct blocker in the walking path, return [].
-Do NOT include markdown formatting or code blocks. Return raw JSON only.`;
+Omit parked cars well off the path, background buildings, distant scenery, and anything more than ~10 metres away.
+If nothing needs reporting, return [].
+Return raw JSON only — no markdown, no code fences.`;
 
 export async function analyzeFrame(base64Image: string): Promise<HazardReport[]> {
   if (!process.env.EXPO_PUBLIC_GEMINI_API_KEY) {

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { CameraView } from "expo-camera";
 import GestureOverlay from "../components/GestureOverlay";
@@ -20,7 +20,7 @@ export default function MainScreen() {
   useEffect(() => {
     if (lastHazards.length === 0) return;
     const now = Date.now();
-    const DEDUP_MS = 30_000;
+    const DEDUP_MS = 1;
 
     for (const hazard of lastHazards) {
       const lastSeen = seenTagsRef.current.get(hazard.tag) ?? 0;
