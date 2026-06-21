@@ -102,6 +102,34 @@ Every gesture triggers a haptic response so you know it registered. Long press h
 
 ---
 
+## AI Infrastructure — Flock
+
+All AI inference in VisionPro routes through **[Flock](https://flock.io)**, a UK-based sovereign AI gateway. This means every AI call the app makes — hazard detection, voice transcription, navigation Q&A — is processed within UK jurisdiction rather than passing through US-based cloud infrastructure.
+
+Flock exposes an OpenAI-compatible API (powered by LiteLLM under the hood), which lets us use the Vercel AI SDK's `@ai-sdk/openai-compatible` adapter and swap or mix models without changing application code. The app currently uses `gemini-3-flash-preview` routed through Flock's endpoint at `api.flock.io/v1`.
+
+```
+User action → App (Expo / React Native)
+                ↓
+          Flock API (UK sovereign gateway)
+                ↓
+         Gemini 3 Flash Preview
+                ↓
+           Response back to app
+```
+
+**Why this matters for accessibility.** VisionPro is built for users in the UK. Routing AI calls through UK-sovereign infrastructure means user data — camera frames, voice recordings, location context — is processed under UK data protection law and never leaves UK jurisdiction. For a health and accessibility product this is a meaningful compliance and trust consideration.
+
+**The three AI call types:**
+
+| Call | Trigger | What's sent |
+|------|---------|-------------|
+| Hazard detection | Every 3 seconds | Camera frame (JPEG) |
+| Voice transcription | After user speaks | WAV audio recording |
+| Navigation Q&A | On hold gesture | Question + route steps + GPS trail + optional camera frame |
+
+---
+
 ## Tech Stack
 
 | Component | Technology |
@@ -109,9 +137,9 @@ Every gesture triggers a haptic response so you know it registered. Long press h
 | Framework | Expo SDK 54 (React Native 0.81) |
 | Language | TypeScript (strict) |
 | Package manager | Bun |
-| Vision AI | Google Gemini via Flock API (`@ai-sdk/openai-compatible`) |
-| Voice transcription | Google Gemini (audio → text) |
-| Text-to-speech | `expo-speech` (native iOS/Android TTS) |
+| AI gateway | Flock (UK sovereign, LiteLLM-based) |
+| AI model | Google Gemini 3 Flash Preview via `@ai-sdk/openai-compatible` |
+| Text-to-speech | ElevenLabs (with expo-speech fallback) |
 | Camera | `expo-camera` |
 | Location | `expo-location` (GPS + reverse geocoding) |
 | Routing | Google Maps Directions API (walking) |
@@ -202,6 +230,8 @@ Scan the QR code with Expo Go on your iOS device. The app requests camera, micro
 **Navigation Q&A context buffers.** A circular buffer keeps the last 5 camera frames and last 10 GPS points in memory. When the user asks a question during navigation, the AI receives the current route, recent movement, and (for visual questions) the latest camera frame.
 
 **Visual questions vs. navigation questions.** The Q&A system detects whether a question is about the visual environment or about route/direction using keyword matching. Visual questions attach the last camera frame; navigation questions use route steps alone — mixing them caused the model to return empty responses.
+
+**Flock as a single AI entrypoint.** Rather than calling Gemini directly, all three AI paths (hazard detection, transcription, Q&A) go through the same Flock gateway using a single API key and a consistent request format. This makes it straightforward to swap models, add rate limiting, or audit usage centrally — and keeps every AI call within UK jurisdiction.
 
 ---
 
