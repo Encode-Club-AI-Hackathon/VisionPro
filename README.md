@@ -16,9 +16,11 @@ For users with partial vision, a high-contrast visual HUD overlays the camera fe
 
 ## Features
 
-- **Real-time hazard detection** — Camera frames are analyzed by Gemini every 3 seconds. Only immediate, actionable blockers are announced: moving vehicles, open holes, low obstacles, stairs, and curbs directly in the walking path. Distant objects and background scenery are ignored. Duplicate hazards are suppressed for 30 seconds using stable AI-assigned tags.
+- **Real-time hazard detection** — Camera frames are analyzed by Gemini every 3.5 seconds in both explore and navigation modes. Hazards are classified as critical (stop now) or warning (steer around): moving vehicles, open holes, head-height obstacles, steps, kerb drops, people blocking the path, bollards, puddles, and more. Duplicate hazards are suppressed for 10 seconds using stable AI-assigned tags. Multiple simultaneous hazards are batched into a single announcement.
 
-- **Priority text-to-speech** — Critical warnings interrupt everything instantly. Navigation instructions, warnings, and info are queued separately. The same text won't repeat within 5 seconds. Any gesture clears the queue and stops speech immediately.
+- **ElevenLabs TTS** — Speech is synthesised using ElevenLabs Flash V2.5 for natural, low-latency voice output. Phrases are cached locally on first use so repeated announcements (navigation instructions, common prompts) play instantly from disk with no API call. Falls back to the device's built-in speech engine if no ElevenLabs key is configured.
+
+- **Priority text-to-speech queue** — Critical warnings interrupt everything instantly. Navigation instructions, warnings, and info are queued separately with a max depth of 3. The same text won't repeat within 5 seconds. Any gesture clears the queue and stops speech immediately.
 
 - **Turn-by-turn walking navigation** — Walking directions from Google Maps with live GPS tracking, automatic step advancement, approach prompts at 30m / 15m / 7m, off-route detection, wrong-way detection, and periodic progress updates.
 
