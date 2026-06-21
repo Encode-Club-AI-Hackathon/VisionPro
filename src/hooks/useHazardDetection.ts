@@ -1,19 +1,16 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
-import type CameraView from 'expo-camera/build/CameraView';
-import { analyzeFrame } from '../services/gemini';
-import { addContextImage } from '../services/navContext';
-import type { HazardReport } from '../types';
+import { useRef, useState, useEffect, useCallback } from "react";
+import type CameraView from "expo-camera/build/CameraView";
+import { analyzeFrame } from "../services/gemini";
+import { addContextImage } from "../services/navContext";
+import type { HazardReport } from "../types";
 
 // Set to false to quickly disable hazard detection during development
 export const HAZARD_DETECTION_ENABLED = true;
 
 // Fixed interval between scans — runs independently of TTS
-const SCAN_INTERVAL_MS = 3_000;
+const SCAN_INTERVAL_MS = 2_000;
 
-export function useHazardDetection(
-  cameraRef: React.RefObject<CameraView | null>,
-  enabled: boolean
-) {
+export function useHazardDetection(cameraRef: React.RefObject<CameraView | null>, enabled: boolean) {
   const [lastHazards, setLastHazards] = useState<HazardReport[]>([]);
   const isAnalyzing = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -46,7 +43,7 @@ export function useHazardDetection(
       const hazards = await analyzeFrame(photo.base64);
       setLastHazards(hazards);
     } catch (error) {
-      console.error('Gemini analysis error:', error);
+      console.error("Gemini analysis error:", error);
     } finally {
       isAnalyzing.current = false;
     }
