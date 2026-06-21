@@ -58,7 +58,7 @@ const GESTURE_HINTS: Record<AppMode, string[]> = {
     'SWIPE RIGHT = Next',
     'SWIPE LEFT = Previous',
     'DOUBLE TAP = Choose',
-    'HOLD = Cancel',
+    'HOLD = Repeat',
   ],
   favorites: [
     'SWIPE RIGHT = Next',

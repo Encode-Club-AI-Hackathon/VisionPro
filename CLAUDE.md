@@ -1,6 +1,6 @@
 @AGENTS.md
 
-# BlindNav
+# VisionPro
 
 Accessibility navigation app for visually impaired users. Single-screen Expo React Native app using camera-based hazard detection, turn-by-turn navigation, and voice-first interaction.
 
