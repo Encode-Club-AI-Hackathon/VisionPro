@@ -20,21 +20,29 @@ export default function MainScreen() {
   useEffect(() => {
     if (lastHazards.length === 0) return;
     const now = Date.now();
-    const DEDUP_MS = 1;
+    const DEDUP_MS = 10_000;
 
-    for (const hazard of lastHazards) {
-      const lastSeen = seenTagsRef.current.get(hazard.tag) ?? 0;
-      if (now - lastSeen < DEDUP_MS) continue;
-      seenTagsRef.current.set(hazard.tag, now);
+    const newHazards = lastHazards.filter((h) => {
+      const lastSeen = seenTagsRef.current.get(h.tag) ?? 0;
+      if (now - lastSeen < DEDUP_MS) return false;
+      seenTagsRef.current.set(h.tag, now);
+      return true;
+    });
 
-      if (hazard.severity === "critical") {
-        const suffix = mode === "select_destination" ? " Tap for options." : "";
-        speechService.speakImmediate(hazard.description + suffix);
-      } else {
-        speechService.speakWarning(hazard.description);
-      }
+    if (newHazards.length === 0) return;
+
+    console.log('[mainscreen] new hazards:', newHazards.map((h) => `${h.severity}:${h.tag}`).join(', '));
+
+    const criticals = newHazards.filter((h) => h.severity === "critical");
+    const warnings = newHazards.filter((h) => h.severity === "warning");
+
+    if (criticals.length > 0) {
+      const suffix = mode === "select_destination" ? " Tap for options." : "";
+      speechService.speakImmediate(criticals.map((h) => h.description).join(". ") + suffix);
+    } else if (warnings.length > 0) {
+      speechService.speakWarning(warnings.slice(0, 2).map((h) => h.description).join(". "));
     }
-  }, [lastHazards, isNavigating, mode]);
+  }, [lastHazards, mode]);
 
   return (
     <View style={styles.container}>
@@ -48,6 +56,7 @@ export default function MainScreen() {
         currentInstruction={currentInstruction}
         remainingDistance={remainingDistance}
         lastGesture={lastGesture ?? undefined}
+        lastHazards={lastHazards}
       />
 
       <GestureOverlay onGesture={handleGesture} />

@@ -16,13 +16,19 @@ export function useHazardDetection(cameraRef: React.RefObject<CameraView | null>
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const scan = useCallback(async () => {
-    // Skip if already analyzing or camera not ready
-    if (isAnalyzing.current || !cameraRef.current) return;
+    if (isAnalyzing.current) {
+      console.log('[hazard] skipping scan — already analyzing');
+      return;
+    }
+    if (!cameraRef.current) {
+      console.log('[hazard] skipping scan — no camera ref');
+      return;
+    }
 
     isAnalyzing.current = true;
+    console.log('[hazard] starting scan');
 
     try {
-      // 1. Capture frame
       let photo: { base64?: string | null } | undefined;
       try {
         photo = await cameraRef.current.takePictureAsync({
@@ -30,20 +36,24 @@ export function useHazardDetection(cameraRef: React.RefObject<CameraView | null>
           quality: 0.3,
           skipProcessing: true,
         });
-      } catch {
-        // Camera busy, skip this cycle
+      } catch (e) {
+        console.warn('[hazard] camera capture failed:', e);
         return;
       }
 
-      if (!photo?.base64) return;
+      if (!photo?.base64) {
+        console.warn('[hazard] no base64 in photo');
+        return;
+      }
 
+      console.log('[hazard] captured frame, sending to Gemini');
       addContextImage(photo.base64);
 
-      // 2. Analyze with Gemini (runs in background, doesn't block TTS)
       const hazards = await analyzeFrame(photo.base64);
+      console.log('[hazard] setLastHazards:', hazards.length, 'hazard(s)');
       setLastHazards(hazards);
     } catch (error) {
-      console.error("Gemini analysis error:", error);
+      console.error('[hazard] scan error:', error);
     } finally {
       isAnalyzing.current = false;
     }

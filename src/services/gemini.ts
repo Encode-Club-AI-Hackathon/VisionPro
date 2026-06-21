@@ -1,16 +1,7 @@
-import { generateText } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { HazardReport } from '../types';
 
-const flock = createOpenAICompatible({
-  name: 'flock',
-  baseURL: 'https://api.flock.io/v1',
-  headers: {
-    'x-litellm-api-key': process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
-  },
-});
-
-const model = flock('gemini-3-flash-preview');
+const FLOCK_BASE_URL = 'https://api.flock.io/v1';
+const FLOCK_MODEL = 'gemini-3-flash-preview';
 
 const HAZARD_PROMPT = `You are a hazard detection assistant for a blind pedestrian. Describe anything in front of them that they need to know about to walk safely.
 
@@ -43,36 +34,70 @@ Return raw JSON only — no markdown, no code fences.`;
 
 export async function analyzeFrame(base64Image: string): Promise<HazardReport[]> {
   if (!process.env.EXPO_PUBLIC_GEMINI_API_KEY) {
-    console.warn('Gemini API key not set');
+    console.warn('[gemini] API key not set');
     return [];
   }
 
   const cleanBase64 = base64Image.replace(/[\s\r\n]/g, '');
-  if (!cleanBase64) return [];
+  if (!cleanBase64) {
+    console.warn('[gemini] empty base64 image');
+    return [];
+  }
+
+  console.log('[gemini] analyzing frame, base64 length:', cleanBase64.length);
 
   try {
-    const { text } = await generateText({
-      model,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: HAZARD_PROMPT },
-            {
-              type: 'image',
-              image: `data:image/jpeg;base64,${cleanBase64}`,
-            },
-          ],
-        },
-      ],
-      temperature: 0.2,
-      maxOutputTokens: 512,
+    const res = await fetch(`${FLOCK_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-litellm-api-key': process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
+      },
+      body: JSON.stringify({
+        model: FLOCK_MODEL,
+        temperature: 0.2,
+        max_tokens: 1024,
+        thinking: { budget_tokens: 512 },
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: HAZARD_PROMPT },
+              {
+                type: 'image_url',
+                image_url: { url: `data:image/jpeg;base64,${cleanBase64}` },
+              },
+            ],
+          },
+        ],
+      }),
     });
 
+    const rawBody = await res.text();
+    console.log('[gemini] HTTP status:', res.status);
+    console.log('[gemini] raw body:', rawBody.slice(0, 500));
+
+    if (!res.ok) {
+      throw new Error(`flock ${res.status}: ${rawBody}`);
+    }
+
+    const json = JSON.parse(rawBody) as {
+      choices: Array<{ message: { content: string }; finish_reason: string }>;
+      usage?: { total_tokens: number };
+    };
+
+    const text = json.choices?.[0]?.message?.content ?? '';
+    console.log('[gemini] finishReason:', json.choices?.[0]?.finish_reason, 'tokens:', json.usage?.total_tokens);
+    console.log('[gemini] parsed text:', JSON.stringify(text));
+
     const cleaned = text.replace(/```json?\s*/g, '').replace(/```/g, '').trim();
-    if (!cleaned || cleaned === '[]') return [];
+    if (!cleaned || cleaned === '[]') {
+      console.log('[gemini] no hazards detected');
+      return [];
+    }
 
     const hazards: Array<{ tag?: string; description: string; severity: string }> = JSON.parse(cleaned);
+    console.log('[gemini] hazards:', JSON.stringify(hazards));
 
     return hazards.map((h) => ({
       tag: h.tag ?? h.description.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40),
@@ -80,7 +105,8 @@ export async function analyzeFrame(base64Image: string): Promise<HazardReport[]>
       severity: h.severity as HazardReport['severity'],
       timestamp: Date.now(),
     }));
-  } catch {
+  } catch (e) {
+    console.error('[gemini] error:', e);
     return [];
   }
 }

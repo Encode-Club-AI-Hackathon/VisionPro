@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import type { AppMode } from '../types';
+import type { AppMode, HazardReport } from '../types';
 
 interface StatusBarProps {
   mode: AppMode;
@@ -10,6 +10,7 @@ interface StatusBarProps {
   currentInstruction?: string;
   remainingDistance?: number;
   lastGesture?: string;
+  lastHazards?: HazardReport[];
 }
 
 const MODE_LABELS: Record<AppMode, string> = {
@@ -80,6 +81,7 @@ export default function StatusBar({
   currentInstruction,
   remainingDistance,
   lastGesture,
+  lastHazards = [],
 }: StatusBarProps) {
   return (
     <View style={styles.container} pointerEvents="none">
@@ -111,6 +113,23 @@ export default function StatusBar({
           <Text style={styles.instructionText}>{currentInstruction}</Text>
         </View>
       ) : null}
+
+      {/* Hazard alerts */}
+      {lastHazards.length > 0 && (
+        <View style={styles.hazardContainer}>
+          {lastHazards.map((h) => (
+            <View
+              key={h.tag}
+              style={[
+                styles.hazardBadge,
+                { backgroundColor: h.severity === 'critical' ? '#e74c3c' : '#e67e22' },
+              ]}
+            >
+              <Text style={styles.hazardText}>{h.description}</Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       {/* Last gesture feedback */}
       {lastGesture ? (
@@ -196,6 +215,23 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     lineHeight: 28,
+  },
+
+  // Hazard alerts
+  hazardContainer: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    gap: 6,
+  },
+  hazardBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  hazardText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
   },
 
   // Gesture feedback flash
