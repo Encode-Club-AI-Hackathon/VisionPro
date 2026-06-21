@@ -30,7 +30,8 @@
           "locationWhenInUsePermission": "BlindNav uses your location for navigation.",
           "locationAlwaysAndWhenInUsePermission": "BlindNav uses your location for continuous navigation."
         }
-      ]
+      ],
+      "expo-audio"
     ]
   }
 }

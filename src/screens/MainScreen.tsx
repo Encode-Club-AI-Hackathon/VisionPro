@@ -14,6 +14,7 @@ export default function MainScreen() {
     mode,
     hazardDetectionEnabled,
     isNavigating,
+    isProcessing,
     currentInstruction,
     remainingDistance,
     lastGesture,
@@ -39,7 +40,7 @@ export default function MainScreen() {
 
       if (hazard.severity === 'critical') {
         speechService.speakImmediate(hazard.description);
-      } else {
+      } else if (!isNavigating) {
         speechService.speakWarning(hazard.description);
       }
     }
@@ -58,6 +59,7 @@ export default function MainScreen() {
         mode={mode}
         hazardDetectionEnabled={hazardDetectionEnabled}
         isNavigating={isNavigating}
+        isProcessing={isProcessing}
         currentInstruction={currentInstruction}
         remainingDistance={remainingDistance}
         lastGesture={lastGesture ?? undefined}

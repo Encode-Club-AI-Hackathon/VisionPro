@@ -1,11 +1,12 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import type { AppMode } from '../types';
 
 interface StatusBarProps {
   mode: AppMode;
   hazardDetectionEnabled: boolean;
   isNavigating: boolean;
+  isProcessing: boolean;
   currentInstruction?: string;
   remainingDistance?: number;
   lastGesture?: string;
@@ -17,6 +18,7 @@ const MODE_LABELS: Record<AppMode, string> = {
   destination: 'SET DESTINATION',
   select_destination: 'CHOOSE PLACE',
   favorites: 'FAVORITES',
+  asking: 'ASK A QUESTION',
 };
 
 const MODE_COLORS: Record<AppMode, string> = {
@@ -25,6 +27,7 @@ const MODE_COLORS: Record<AppMode, string> = {
   destination: '#8e44ad',
   select_destination: '#d35400',
   favorites: '#f39c12',
+  asking: '#16a085',
 };
 
 function formatDistance(meters: number): string {
@@ -43,6 +46,7 @@ const GESTURE_HINTS: Record<AppMode, string[]> = {
   navigate: [
     'TAP = Repeat',
     'DOUBLE TAP = Stop',
+    'HOLD = Ask a Question',
     'SWIPE DOWN = Location',
   ],
   destination: [
@@ -61,12 +65,18 @@ const GESTURE_HINTS: Record<AppMode, string[]> = {
     'DOUBLE TAP = Go',
     'SWIPE LEFT = Back',
   ],
+  asking: [
+    'Speak your question',
+    'DOUBLE TAP = Done',
+    'SWIPE LEFT = Cancel',
+  ],
 };
 
 export default function StatusBar({
   mode,
   hazardDetectionEnabled,
   isNavigating,
+  isProcessing,
   currentInstruction,
   remainingDistance,
   lastGesture,
@@ -79,6 +89,9 @@ export default function StatusBar({
           <Text style={styles.modeText}>{MODE_LABELS[mode]}</Text>
         </View>
         <View style={styles.statusRow}>
+          {isProcessing && (
+            <ActivityIndicator size="small" color="#fff" style={styles.spinner} />
+          )}
           {hazardDetectionEnabled && (
             <View style={[styles.smallBadge, { backgroundColor: '#e74c3c' }]}>
               <Text style={styles.smallBadgeText}>HAZARD ON</Text>
@@ -150,7 +163,11 @@ const styles = StyleSheet.create({
   },
   statusRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
+  },
+  spinner: {
+    marginRight: 4,
   },
   smallBadge: {
     paddingHorizontal: 10,

@@ -1,13 +1,14 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import type CameraView from 'expo-camera/build/CameraView';
 import { analyzeFrame } from '../services/gemini';
+import { addContextImage } from '../services/navContext';
 import type { HazardReport } from '../types';
 
 // Set to false to quickly disable hazard detection during development
 export const HAZARD_DETECTION_ENABLED = true;
 
 // Fixed interval between scans — runs independently of TTS
-const SCAN_INTERVAL_MS = 5_000;
+const SCAN_INTERVAL_MS = 3_000;
 
 export function useHazardDetection(
   cameraRef: React.RefObject<CameraView | null>,
@@ -38,6 +39,8 @@ export function useHazardDetection(
       }
 
       if (!photo?.base64) return;
+
+      addContextImage(photo.base64);
 
       // 2. Analyze with Gemini (runs in background, doesn't block TTS)
       const hazards = await analyzeFrame(photo.base64);

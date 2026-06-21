@@ -11,6 +11,12 @@ import {
   polylineDistanceFrom,
 } from '../services/navigation';
 import { speechService } from '../services/speech';
+import {
+  addContextGpsPoint,
+  clearNavigationState,
+  setContextRoute,
+  setContextRemainingDistance,
+} from '../services/navContext';
 import type { Coordinate, Route, RouteStep } from '../types';
 
 const WAYPOINT_THRESHOLD_M = 7;
@@ -135,6 +141,7 @@ export function useNavigation(): UseNavigationResult {
     setCurrentStep(null);
     setCurrentInstruction('');
     setRemainingDistance(0);
+    clearNavigationState();
   }, []);
 
   const advanceStep = useCallback(() => {
@@ -182,6 +189,7 @@ export function useNavigation(): UseNavigationResult {
         const pathLen = computePathLength(history);
         smoothTravelBearingRef.current =
           pathLen >= POSITION_TOTAL_MIN_M ? computeSmoothedBearing(history) : null;
+        addContextGpsPoint(coord);
       }
 
       const route = routeRef.current;
@@ -202,6 +210,7 @@ export function useNavigation(): UseNavigationResult {
         route.polyline
       );
       setRemainingDistance(remainingPolylineDist);
+      setContextRemainingDistance(remainingPolylineDist);
 
       // Off-route detection — announce and set pendingReroute, do NOT auto-reroute.
       // The user must double-tap to confirm recalculation.
@@ -364,6 +373,7 @@ export function useNavigation(): UseNavigationResult {
 
       routeRef.current = route;
       destinationRef.current = destination;
+      setContextRoute(route);
       stepIndexRef.current = 0;
       stepPolylineMapRef.current = buildStepToPolylineMap(route.steps, route.polyline);
       currentPolylineIndexRef.current = 0;

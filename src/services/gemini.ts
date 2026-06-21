@@ -57,6 +57,8 @@ export async function analyzeFrame(base64Image: string): Promise<HazardReport[]>
     });
 
     const cleaned = text.replace(/```json?\s*/g, '').replace(/```/g, '').trim();
+    if (!cleaned || cleaned === '[]') return [];
+
     const hazards: Array<{ tag?: string; description: string; severity: string }> = JSON.parse(cleaned);
 
     return hazards.map((h) => ({
@@ -65,8 +67,7 @@ export async function analyzeFrame(base64Image: string): Promise<HazardReport[]>
       severity: h.severity as HazardReport['severity'],
       timestamp: Date.now(),
     }));
-  } catch (error) {
-    console.error('Gemini analysis failed:', error);
+  } catch {
     return [];
   }
 }

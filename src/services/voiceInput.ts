@@ -1,4 +1,11 @@
-import { Audio } from 'expo-av';
+import type { AudioRecorder } from 'expo-audio';
+import {
+  AudioQuality,
+  IOSOutputFormat,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+} from 'expo-audio';
+import AudioModule from 'expo-audio/build/AudioModule';
 import { generateText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
@@ -12,8 +19,32 @@ const flock = createOpenAICompatible({
 
 const model = flock('gemini-3-flash-preview');
 
+const WAV_OPTIONS = {
+  ios: {
+    extension: '.wav',
+    outputFormat: IOSOutputFormat.LINEARPCM,
+    audioQuality: AudioQuality.HIGH,
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 128000,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  android: {
+    extension: '.wav',
+    outputFormat: 'default' as const,
+    audioEncoder: 'default' as const,
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 128000,
+  },
+  web: {},
+  isMeteringEnabled: false,
+};
+
 let isListening = false;
-let recording: Audio.Recording | null = null;
+let recorder: AudioRecorder | null = null;
 let onResultCallback: ((text: string) => void) | null = null;
 let onErrorCallback: ((error: string) => void) | null = null;
 
@@ -21,12 +52,9 @@ export async function startListening(
   onResult: (text: string) => void,
   onError: (error: string) => void
 ): Promise<void> {
-  // Force-unload any stale recording from a previous session. cancelListening fires
-  // stopAndUnloadAsync asynchronously, so the native audio session may still be active
-  // when a new session starts — causing an "already recording" error from Expo Audio.
-  if (recording) {
-    await recording.stopAndUnloadAsync().catch(() => {});
-    recording = null;
+  if (recorder) {
+    await recorder.stop().catch(() => {});
+    recorder = null;
   }
   isListening = false;
   onResultCallback = null;
@@ -36,62 +64,47 @@ export async function startListening(
   onErrorCallback = onError;
 
   try {
-    const { granted } = await Audio.requestPermissionsAsync();
+    const { granted } = await requestRecordingPermissionsAsync();
     if (!granted) {
       onError('Microphone permission not granted');
       return;
     }
 
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-      playThroughEarpieceAndroid: false,
-    });
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
 
-    recording = new Audio.Recording();
-    await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-    await recording.startAsync();
+    recorder = new AudioModule.AudioRecorder(WAV_OPTIONS);
+    await recorder.prepareToRecordAsync();
+    recorder.record();
     isListening = true;
   } catch (err) {
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      playThroughEarpieceAndroid: false,
-    }).catch(() => {});
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     onError(`Failed to start recording: ${err}`);
     cleanup();
   }
 }
 
 export async function stopListeningAndSubmit(): Promise<void> {
-  if (!isListening || !recording) {
+  if (!isListening || !recorder) {
     onErrorCallback?.('Not currently listening');
     cleanup();
     return;
   }
 
   try {
-    await recording.stopAndUnloadAsync();
-    const uri = recording.getURI();
+    await recorder.stop();
+    const uri = recorder.uri;
     if (!uri) {
       onErrorCallback?.('No audio recorded');
       cleanup();
       return;
     }
 
-    // Reset audio mode so TTS works again
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      playThroughEarpieceAndroid: false,
-    });
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
 
-    // Read audio file as base64
     const response = await fetch(uri);
     const blob = await response.blob();
     const base64 = await blobToBase64(blob);
 
-    // Send to Gemini for transcription
     const { text } = await generateText({
       model,
       messages: [
@@ -100,12 +113,12 @@ export async function stopListeningAndSubmit(): Promise<void> {
           content: [
             {
               type: 'text',
-              text: 'Transcribe this audio. The user is speaking a destination or address. Return ONLY the transcribed text, nothing else. No quotes, no explanation.',
+              text: 'Transcribe this audio. The user is speaking a destination, address, or question. Return ONLY the transcribed text, nothing else. No quotes, no explanation.',
             },
             {
               type: 'file' as const,
               data: base64,
-              mediaType: 'audio/mp4' as const,
+              mediaType: 'audio/wav' as const,
             },
           ],
         },
@@ -127,13 +140,9 @@ export async function stopListeningAndSubmit(): Promise<void> {
 }
 
 export function cancelListening(): void {
-  if (recording && isListening) {
-    recording.stopAndUnloadAsync().catch(() => {});
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      playThroughEarpieceAndroid: false,
-    }).catch(() => {});
+  if (recorder && isListening) {
+    recorder.stop().catch(() => {});
+    setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
   }
   cleanup();
 }
@@ -144,7 +153,7 @@ export function getIsListening(): boolean {
 
 function cleanup(): void {
   isListening = false;
-  recording = null;
+  recorder = null;
   onResultCallback = null;
   onErrorCallback = null;
 }
@@ -154,7 +163,6 @@ function blobToBase64(blob: Blob): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // Strip the data:...;base64, prefix
       const base64 = result.split(',')[1] ?? result;
       resolve(base64);
     };

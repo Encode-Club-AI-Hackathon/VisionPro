@@ -3,8 +3,6 @@ import { findDestinationsNearMe } from '../services/places';
 import { speechService } from '../services/speech';
 import { playTone } from '../services/tone';
 import { cancelListening, startListening, stopListeningAndSubmit } from '../services/voiceInput';
-import { getNavContext, setContextDestinationName } from '../services/navContext';
-import { answerNavigationQuestion } from '../services/navQA';
 import { getFavorites, getFavoritesCount } from '../store/favorites';
 import type {
   AppMode,
@@ -29,7 +27,6 @@ export function useBlindNavController(cameraReady: boolean) {
   const [hazardDetectionEnabled, setHazardDetectionEnabled] = useState(true);
   const [lastGesture, setLastGesture] = useState<string | null>(null);
   const [activeDestinationName, setActiveDestinationName] = useState<string | undefined>();
-  const [isProcessing, setIsProcessing] = useState(false);
 
   const gestureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const favoritesIndex = useRef(0);
@@ -62,64 +59,36 @@ export function useBlindNavController(cameraReady: boolean) {
   const handleDestinationVoiceResult = useCallback(
     async (text: string) => {
       setMode('explore');
-      speechService.speakInfo(`Looking up ${text}`);
+      speechService.speakInfo(`Searching for ${text}`);
 
-      try {
-        const destinations = await findDestinationsNearMe(text);
-        if (destinations.length === 0) {
-          clearDestinations();
-          speechService.speakWarning(
-            `Could not find a nearby location for "${text}". Please try again.`
-          );
-          return;
-        }
-
-        pendingDestinations.current = destinations;
-        destinationIndex.current = 0;
-        setMode('select_destination');
-        speechService.speakInfo(formatDestinationChoice(destinations[0], 0, destinations.length));
-      } finally {
-        setIsProcessing(false);
+      const destinations = await findDestinationsNearMe(text);
+      if (destinations.length === 0) {
+        clearDestinations();
+        speechService.speakWarning(
+          `Could not find a nearby location for "${text}". Please try again.`
+        );
+        return;
       }
+
+      pendingDestinations.current = destinations;
+      destinationIndex.current = 0;
+      setMode('select_destination');
+      speechService.speakInfo(formatDestinationChoice(destinations[0], 0, destinations.length));
     },
     [clearDestinations]
   );
-
-  const handleNavigationQuestion = useCallback(async (question: string) => {
-    try {
-      const context = getNavContext();
-      console.log('navQA context:', { images: context.images.length, gps: context.gpsPoints.length, hasRoute: !!context.route });
-      const answer = await answerNavigationQuestion(question, context);
-      console.log('navQA answer:', answer);
-      speechService.speakImmediate(answer);
-    } catch (e) {
-      console.error('navQA failed:', e);
-      speechService.speakImmediate('Could not answer your question. Please try again.');
-    } finally {
-      setIsProcessing(false);
-      setMode('navigate');
-    }
-  }, []);
-
-  const startNavigationQuestion = useCallback(async () => {
-    setMode('asking');
-    await speechService.speakInfo('Ask your question after the tone.');
-    await speechService.waitUntilIdle();
-    await playTone();
-    startListening(handleNavigationQuestion, (error) => {
-      speechService.speakWarning(`Voice input failed. ${error}`);
-      setMode('navigate');
-    });
-  }, [handleNavigationQuestion]);
 
   const speakCurrentContext = useCallback(async () => {
     if (isNavigating && currentInstruction) {
       if (pendingReroute) {
         speechService.speakNavigation(
-          `You are off route. ${currentInstruction}`
+          `You are off route. ${currentInstruction} Double tap to recalculate.`
         );
       } else {
-        speechService.speakNavigation(currentInstruction);
+        speechService.speakNavigation(
+          `${currentInstruction} ` +
+            'Tap to repeat. Double tap to stop navigation. Swipe down for your location.'
+        );
       }
       return;
     }
@@ -129,17 +98,18 @@ export function useBlindNavController(cameraReady: boolean) {
       if (favorites.length > 0) {
         const fav = favorites[favoritesIndex.current % favorites.length];
         speechService.speakInfo(
-          `${fav.name}. ${fav.address}.`
+          `${fav.name}. ${fav.address}. ` +
+            'Swipe right for next. Double tap to navigate here. Swipe left to go back.'
         );
       } else {
-        speechService.speakInfo('No favorites saved.');
+        speechService.speakInfo('No favorites saved. Swipe left to go back.');
       }
       return;
     }
 
     if (mode === 'destination') {
       speechService.speakInfo(
-        'Listening for your destination. Speak now.'
+        'Listening for your destination. Speak now. Double tap when done. Swipe left to cancel.'
       );
       return;
     }
@@ -157,7 +127,11 @@ export function useBlindNavController(cameraReady: boolean) {
     }
 
     const hazardStatus = hazardDetectionEnabled ? 'Hazard detection on' : 'Hazard detection off';
-    speechService.speakInfo(`Explore mode. ${hazardStatus}.`);
+    speechService.speakInfo(
+      `Explore mode. ${hazardStatus}. ` +
+        'Swipe up to set a destination. Swipe down for your location. ' +
+        'Long press for favorites. Two finger tap to toggle hazard detection.'
+    );
   }, [currentInstruction, hazardDetectionEnabled, isNavigating, mode, pendingReroute]);
 
   const startSelectedDestination = useCallback(async () => {
@@ -166,15 +140,9 @@ export function useBlindNavController(cameraReady: boolean) {
 
     setMode('navigate');
     setActiveDestinationName(destination.name);
-    setContextDestinationName(destination.name);
     clearDestinations();
-    setIsProcessing(true);
-    speechService.speakInfo(`Finding the best route to ${destination.name}. Please wait.`);
-    try {
-      await startNavigation(destination.coordinate);
-    } finally {
-      setIsProcessing(false);
-    }
+    speechService.speakInfo(`Starting navigation to ${destination.name}`);
+    await startNavigation(destination.coordinate);
   }, [clearDestinations, startNavigation]);
 
   const startSelectedFavorite = useCallback(async () => {
@@ -184,14 +152,8 @@ export function useBlindNavController(cameraReady: boolean) {
     const fav = favorites[favoritesIndex.current % favorites.length];
     setMode('navigate');
     setActiveDestinationName(fav.name);
-    setContextDestinationName(fav.name);
-    setIsProcessing(true);
-    speechService.speakInfo(`Finding the best route to ${fav.name}. Please wait.`);
-    try {
-      await startNavigation(fav.coordinate);
-    } finally {
-      setIsProcessing(false);
-    }
+    speechService.speakInfo(`Starting navigation to ${fav.name}`);
+    await startNavigation(fav.coordinate);
   }, [startNavigation]);
 
   const speakNextFavorite = useCallback(async () => {
@@ -201,7 +163,7 @@ export function useBlindNavController(cameraReady: boolean) {
     favoritesIndex.current = (favoritesIndex.current + 1) % count;
     const favorites = await getFavorites();
     const fav = favorites[favoritesIndex.current];
-    speechService.speakInfo(fav.name);
+    speechService.speakInfo(`${fav.name}. Swipe right for next, double tap to navigate.`);
   }, []);
 
   const speakDestinationChoice = useCallback(() => {
@@ -236,7 +198,7 @@ export function useBlindNavController(cameraReady: boolean) {
 
   const startDestinationInput = useCallback(async () => {
     setMode('destination');
-    await speechService.speakInfo('Speak your destination after the tone.');
+    await speechService.speakInfo('Speak your destination after the tone. Double tap when done.');
     await speechService.waitUntilIdle();
     await playTone();
     startListening(handleDestinationVoiceResult, (error) => {
@@ -249,13 +211,14 @@ export function useBlindNavController(cameraReady: boolean) {
     setMode('favorites');
     const favorites = await getFavorites();
     if (favorites.length === 0) {
-      speechService.speakInfo('No saved favorites.');
+      speechService.speakInfo('No saved favorites. Swipe left to go back.');
       return;
     }
 
     favoritesIndex.current = 0;
     speechService.speakInfo(
-      `Favorites. ${favorites.length} saved. ${favorites[0].name}.`
+      `Favorites. ${favorites.length} saved. ${favorites[0].name}. ` +
+        'Swipe right for next, double tap to navigate.'
     );
   }, []);
 
@@ -271,9 +234,7 @@ export function useBlindNavController(cameraReady: boolean) {
           break;
 
         case 'double_tap':
-          if (mode === 'destination' || mode === 'asking') {
-            setIsProcessing(true);
-            speechService.speakInfo(mode === 'asking' ? 'Looking into that' : 'Processing your voice');
+          if (mode === 'destination') {
             await stopListeningAndSubmit();
           } else if (isNavigating && pendingReroute) {
             await confirmReroute();
@@ -287,7 +248,7 @@ export function useBlindNavController(cameraReady: boolean) {
             await startSelectedFavorite();
           } else {
             speechService.speakInfo(
-              'No destination set.'
+              'No destination set. Swipe up to set a destination, or long press for favorites.'
             );
           }
           break;
@@ -310,11 +271,6 @@ export function useBlindNavController(cameraReady: boolean) {
             cancelListening();
             setMode('explore');
             speechService.speakInfo('Cancelled. Back to explore mode.');
-          } else if (mode === 'asking') {
-            cancelListening();
-            setIsProcessing(false);
-            setMode('navigate');
-            speechService.speakInfo('Question cancelled.');
           } else if (mode === 'select_destination') {
             speakPreviousDestination();
           } else {
@@ -340,8 +296,6 @@ export function useBlindNavController(cameraReady: boolean) {
             clearDestinations();
             setMode('explore');
             speechService.speakInfo('Destination selection cancelled. Back to explore mode.');
-          } else if (isNavigating) {
-            await startNavigationQuestion();
           } else {
             await openFavorites();
           }
@@ -364,7 +318,6 @@ export function useBlindNavController(cameraReady: boolean) {
       mode,
       openFavorites,
       pendingReroute,
-      startNavigationQuestion,
       speakCurrentContext,
       speakCurrentLocation,
       speakDestinationChoice,
@@ -382,7 +335,6 @@ export function useBlindNavController(cameraReady: boolean) {
     mode,
     hazardDetectionEnabled,
     isNavigating,
-    isProcessing,
     currentInstruction,
     remainingDistance,
     lastGesture,
@@ -396,9 +348,13 @@ function formatDestinationChoice(
   totalResults: number
 ): string {
   const distance = formatSpokenDistance(destination.distanceMeters);
+  const moreResults =
+    totalResults > 1 ? ' Swipe right for the next nearby result.' : '';
+
   return (
     `Result ${selectedIndex + 1} of ${totalResults}. ` +
-    `${destination.name}, ${distance} away. ${destination.address}.`
+    `${destination.name}, ${distance} away. ` +
+    `${destination.address}. Double tap to start navigation.${moreResults}`
   );
 }
 

@@ -80,9 +80,12 @@ export default function GestureOverlay({ onGesture, children }: GestureOverlayPr
 
   const longPress = Gesture.LongPress()
     .minDuration(600)
+    .onStart(() => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    })
     .onEnd((_event, success) => {
       if (success) {
-        fireGesture('long_press');
+        onGesture('long_press');
       }
     })
     .runOnJS(true);
