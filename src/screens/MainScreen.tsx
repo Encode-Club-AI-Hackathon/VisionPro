@@ -40,7 +40,7 @@ export default function MainScreen() {
 
       if (hazard.severity === 'critical') {
         speechService.speakImmediate(hazard.description);
-      } else if (!isNavigating) {
+      } else {
         speechService.speakWarning(hazard.description);
       }
     }
