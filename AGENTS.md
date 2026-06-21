@@ -1,4 +1,4 @@
-# Agent Guidelines for BlindNav
+# Agent Guidelines for VisionPro
 
 ## Before Writing Any Code
 

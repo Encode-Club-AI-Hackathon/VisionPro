@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Favorite, Coordinate } from '../types';
 
-const STORAGE_KEY = 'blindnav_favorites';
+const STORAGE_KEY = 'visionpro_favorites';
 
 export async function getFavorites(): Promise<Favorite[]> {
   try {

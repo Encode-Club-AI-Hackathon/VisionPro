@@ -114,13 +114,12 @@ export function useBlindNavController(cameraReady: boolean) {
 
   const speakCurrentContext = useCallback(async () => {
     if (isNavigating && currentInstruction) {
-      if (pendingReroute) {
-        speechService.speakNavigation(
-          `You are off route. ${currentInstruction}`
-        );
-      } else {
-        speechService.speakNavigation(currentInstruction);
-      }
+      const routeStatus = pendingReroute
+        ? `Off route. ${currentInstruction}`
+        : currentInstruction;
+      speechService.speakNavigation(
+        `${routeStatus}. Hold to ask a question. Swipe down for your location. Double tap to stop navigation.`
+      );
       return;
     }
 
@@ -129,17 +128,24 @@ export function useBlindNavController(cameraReady: boolean) {
       if (favorites.length > 0) {
         const fav = favorites[favoritesIndex.current % favorites.length];
         speechService.speakInfo(
-          `${fav.name}. ${fav.address}.`
+          `Favorites. ${fav.name}. ${fav.address}. Swipe right for next. Double tap to navigate here. Swipe left to close.`
         );
       } else {
-        speechService.speakInfo('No favorites saved.');
+        speechService.speakInfo('No favorites saved. Swipe left to close.');
       }
       return;
     }
 
     if (mode === 'destination') {
       speechService.speakInfo(
-        'Listening for your destination. Speak now.'
+        'Listening for your destination. Speak now. Double tap when done. Swipe left to cancel.'
+      );
+      return;
+    }
+
+    if (mode === 'asking') {
+      speechService.speakInfo(
+        'Ask your question now. Double tap when done. Swipe left to cancel.'
       );
       return;
     }
@@ -147,17 +153,15 @@ export function useBlindNavController(cameraReady: boolean) {
     if (mode === 'select_destination' && pendingDestinations.current.length > 0) {
       const destination = pendingDestinations.current[destinationIndex.current];
       speechService.speakInfo(
-        formatDestinationChoice(
-          destination,
-          destinationIndex.current,
-          pendingDestinations.current.length
-        )
+        `${formatDestinationChoice(destination, destinationIndex.current, pendingDestinations.current.length)} Swipe right for next. Swipe left for previous. Double tap to start. Long press to cancel.`
       );
       return;
     }
 
     const hazardStatus = hazardDetectionEnabled ? 'Hazard detection on' : 'Hazard detection off';
-    speechService.speakInfo(`Explore mode. ${hazardStatus}.`);
+    speechService.speakInfo(
+      `Explore mode. ${hazardStatus}. Swipe up to set destination. Long press for favorites. Two fingers to toggle hazard detection. Swipe down for your location.`
+    );
   }, [currentInstruction, hazardDetectionEnabled, isNavigating, mode, pendingReroute]);
 
   const startSelectedDestination = useCallback(async () => {

@@ -21,7 +21,7 @@ export default function App() {
       if (camResult.granted && locResult.status === 'granted') {
         setTimeout(() => {
           speechService.speakInfo(
-            'Welcome to BlindNav. ' +
+            'Welcome to VisionPro. ' +
               'Tap anywhere for help and available actions.'
           );
         }, 1000);
@@ -34,7 +34,7 @@ export default function App() {
   if (!ready) {
     return (
       <View style={styles.loading}>
-        <Text style={styles.loadingText}>Loading BlindNav...</Text>
+        <Text style={styles.loadingText}>Loading VisionPro...</Text>
       </View>
     );
   }
@@ -43,7 +43,7 @@ export default function App() {
     return (
       <View style={styles.loading}>
         <Text style={styles.loadingText}>
-          BlindNav requires camera and location permissions to function.
+          VisionPro requires camera and location permissions to function.
           Please grant permissions in Settings.
         </Text>
       </View>

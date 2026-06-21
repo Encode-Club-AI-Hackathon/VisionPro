@@ -1,34 +1,34 @@
 {
   "expo": {
-    "name": "BlindNav",
-    "slug": "blind-nav",
+    "name": "VisionPro",
+    "slug": "vision-pro",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.blindnav.app",
+      "bundleIdentifier": "com.visionpro.app",
       "infoPlist": {
-        "NSCameraUsageDescription": "BlindNav uses the camera to detect obstacles and hazards in your path.",
-        "NSLocationWhenInUseUsageDescription": "BlindNav uses your location for turn-by-turn navigation.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "BlindNav uses your location for continuous navigation guidance.",
-        "NSSpeechRecognitionUsageDescription": "BlindNav uses speech recognition so you can speak your destination.",
-        "NSMicrophoneUsageDescription": "BlindNav uses the microphone for voice input to set destinations."
+        "NSCameraUsageDescription": "VisionPro uses the camera to detect obstacles and hazards in your path.",
+        "NSLocationWhenInUseUsageDescription": "VisionPro uses your location for turn-by-turn navigation.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "VisionPro uses your location for continuous navigation guidance.",
+        "NSSpeechRecognitionUsageDescription": "VisionPro uses speech recognition so you can speak your destination.",
+        "NSMicrophoneUsageDescription": "VisionPro uses the microphone for voice input to set destinations."
       }
     },
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "BlindNav uses the camera to detect obstacles and hazards."
+          "cameraPermission": "VisionPro uses the camera to detect obstacles and hazards."
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "BlindNav uses your location for navigation.",
-          "locationAlwaysAndWhenInUsePermission": "BlindNav uses your location for continuous navigation."
+          "locationWhenInUsePermission": "VisionPro uses your location for navigation.",
+          "locationAlwaysAndWhenInUsePermission": "VisionPro uses your location for continuous navigation."
         }
       ],
       "expo-audio"
