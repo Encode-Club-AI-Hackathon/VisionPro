@@ -6,18 +6,20 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import AudioModule from 'expo-audio/build/AudioModule';
-import { generateText } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
-const flock = createOpenAICompatible({
-  name: 'flock',
-  baseURL: 'https://api.flock.io/v1',
-  headers: {
-    'x-litellm-api-key': process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
-  },
-});
+// ── Direct Gemini API ────────────────────────────────────────────────────────
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
-const model = flock('gemini-3-flash-preview');
+// ── Flock proxy (commented out — switch back by restoring the generateText block) ──
+// import { generateText } from 'ai';
+// import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+// const flock = createOpenAICompatible({
+//   name: 'flock',
+//   baseURL: 'https://api.flock.io/v1',
+//   headers: { 'x-litellm-api-key': process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '' },
+// });
+// const model = flock('gemini-3-flash-preview');
 
 const WAV_OPTIONS = {
   ios: {
@@ -105,30 +107,59 @@ export async function stopListeningAndSubmit(): Promise<void> {
     const blob = await response.blob();
     const base64 = await blobToBase64(blob);
 
-    const { text } = await generateText({
-      model,
-      messages: [
-        {
-          role: 'user',
-          content: [
+    // ── Direct Gemini API ──────────────────────────────────────────────────
+    const res = await fetch(
+      `${GEMINI_BASE_URL}/models/${GEMINI_MODEL}:generateContent?key=${process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? ''}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
             {
-              type: 'text',
-              text: 'Transcribe this audio. The user is speaking a destination, address, or question. Return ONLY the transcribed text, nothing else. No quotes, no explanation.',
-            },
-            {
-              type: 'file' as const,
-              data: base64,
-              mediaType: 'audio/wav' as const,
+              parts: [
+                {
+                  text: 'Transcribe this audio. The user is speaking a destination, address, or question. Return ONLY the transcribed text, nothing else. No quotes, no explanation.',
+                },
+                { inline_data: { mime_type: 'audio/wav', data: base64 } },
+              ],
             },
           ],
-        },
-      ],
-      temperature: 0,
-    });
+          generationConfig: { temperature: 0, maxOutputTokens: 256 },
+        }),
+      }
+    );
 
-    const trimmed = text.trim();
-    if (trimmed) {
-      onResultCallback?.(trimmed);
+    if (!res.ok) {
+      const err = await res.text().catch(() => '');
+      throw new Error(`gemini ${res.status}: ${err}`);
+    }
+
+    const json = await res.json() as {
+      candidates: Array<{ content: { parts: Array<{ text: string }> } }>;
+    };
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+
+    // ── Flock proxy (commented out) ────────────────────────────────────────
+    // const { text: rawText } = await generateText({
+    //   model,
+    //   messages: [
+    //     {
+    //       role: 'user',
+    //       content: [
+    //         {
+    //           type: 'text',
+    //           text: 'Transcribe this audio. The user is speaking a destination, address, or question. Return ONLY the transcribed text, nothing else. No quotes, no explanation.',
+    //         },
+    //         { type: 'file' as const, data: base64, mediaType: 'audio/wav' as const },
+    //       ],
+    //     },
+    //   ],
+    //   temperature: 0,
+    // });
+    // const text = rawText.trim();
+
+    if (text) {
+      onResultCallback?.(text);
     } else {
       onErrorCallback?.('Could not understand the audio. Please try again.');
     }
