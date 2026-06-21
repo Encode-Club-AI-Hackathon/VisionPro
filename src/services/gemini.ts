@@ -1,12 +1,12 @@
 import type { HazardReport } from '../types';
 
-// ── Direct Gemini API ────────────────────────────────────────────────────────
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const GEMINI_MODEL = 'gemini-3.1-flash-lite';
+// ── Flock proxy ──────────────────────────────────────────────────────────────
+const FLOCK_BASE_URL = 'https://api.flock.io/v1';
+const FLOCK_MODEL = 'gemini-3-flash-preview';
 
-// ── Flock proxy (commented out — switch back by swapping the fetch block) ────
-// const FLOCK_BASE_URL = 'https://api.flock.io/v1';
-// const FLOCK_MODEL = 'gemini-3-flash-preview';
+// ── Direct Gemini API (commented out — swap fetch blocks below to use) ────────
+// const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+// const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
 const HAZARD_PROMPT = `You are a hazard detection assistant for a blind pedestrian. Describe anything in front of them that they need to know about to walk safely.
 
@@ -52,79 +52,76 @@ export async function analyzeFrame(base64Image: string): Promise<HazardReport[]>
   console.log('[gemini] analyzing frame, base64 length:', cleanBase64.length);
 
   try {
-    // ── Direct Gemini API ──────────────────────────────────────────────────
-    const res = await fetch(
-      `${GEMINI_BASE_URL}/models/${GEMINI_MODEL}:generateContent?key=${process.env.EXPO_PUBLIC_GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: HAZARD_PROMPT },
-                { inline_data: { mime_type: 'image/jpeg', data: cleanBase64 } },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 512,
+    // ── Flock proxy ────────────────────────────────────────────────────────
+    const res = await fetch(`${FLOCK_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-litellm-api-key': process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
+      },
+      body: JSON.stringify({
+        model: FLOCK_MODEL,
+        temperature: 0.2,
+        max_tokens: 1024,
+        thinking: { budget_tokens: 512 },
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: HAZARD_PROMPT },
+              {
+                type: 'image_url',
+                image_url: { url: `data:image/jpeg;base64,${cleanBase64}` },
+              },
+            ],
           },
-        }),
-      }
-    );
+        ],
+      }),
+    });
 
-    // ── Flock proxy (commented out) ────────────────────────────────────────
-    // const res = await fetch(`${FLOCK_BASE_URL}/chat/completions`, {
-    //   method: 'POST',
-    //   headers: {
-    //     'Content-Type': 'application/json',
-    //     'x-litellm-api-key': process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
-    //   },
-    //   body: JSON.stringify({
-    //     model: FLOCK_MODEL,
-    //     temperature: 0.2,
-    //     max_tokens: 1024,
-    //     thinking: { budget_tokens: 512 },
-    //     messages: [
-    //       {
-    //         role: 'user',
-    //         content: [
-    //           { type: 'text', text: HAZARD_PROMPT },
-    //           {
-    //             type: 'image_url',
-    //             image_url: { url: `data:image/jpeg;base64,${cleanBase64}` },
-    //           },
-    //         ],
-    //       },
-    //     ],
-    //   }),
-    // });
+    // ── Direct Gemini API (commented out) ─────────────────────────────────
+    // const res = await fetch(
+    //   `${GEMINI_BASE_URL}/models/${GEMINI_MODEL}:generateContent?key=${process.env.EXPO_PUBLIC_GEMINI_API_KEY}`,
+    //   {
+    //     method: 'POST',
+    //     headers: { 'Content-Type': 'application/json' },
+    //     body: JSON.stringify({
+    //       contents: [
+    //         {
+    //           parts: [
+    //             { text: HAZARD_PROMPT },
+    //             { inline_data: { mime_type: 'image/jpeg', data: cleanBase64 } },
+    //           ],
+    //         },
+    //       ],
+    //       generationConfig: { temperature: 0.2, maxOutputTokens: 512 },
+    //     }),
+    //   }
+    // );
 
     const rawBody = await res.text();
     console.log('[gemini] HTTP status:', res.status);
     console.log('[gemini] raw body:', rawBody.slice(0, 500));
 
     if (!res.ok) {
-      throw new Error(`gemini ${res.status}: ${rawBody}`);
+      throw new Error(`flock ${res.status}: ${rawBody}`);
     }
 
-    // ── Direct Gemini response parsing ─────────────────────────────────────
+    // ── Flock response parsing ─────────────────────────────────────────────
     const json = JSON.parse(rawBody) as {
-      candidates: Array<{ content: { parts: Array<{ text: string }> }; finishReason: string }>;
-      usageMetadata?: { totalTokenCount: number };
+      choices: Array<{ message: { content: string }; finish_reason: string }>;
+      usage?: { total_tokens: number };
     };
-    const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    console.log('[gemini] finishReason:', json.candidates?.[0]?.finishReason, 'tokens:', json.usageMetadata?.totalTokenCount);
+    const text = json.choices?.[0]?.message?.content ?? '';
+    console.log('[gemini] finishReason:', json.choices?.[0]?.finish_reason, 'tokens:', json.usage?.total_tokens);
 
-    // ── Flock response parsing (commented out) ─────────────────────────────
+    // ── Direct Gemini response parsing (commented out) ─────────────────────
     // const json = JSON.parse(rawBody) as {
-    //   choices: Array<{ message: { content: string }; finish_reason: string }>;
-    //   usage?: { total_tokens: number };
+    //   candidates: Array<{ content: { parts: Array<{ text: string }> }; finishReason: string }>;
+    //   usageMetadata?: { totalTokenCount: number };
     // };
-    // const text = json.choices?.[0]?.message?.content ?? '';
-    // console.log('[gemini] finishReason:', json.choices?.[0]?.finish_reason, 'tokens:', json.usage?.total_tokens);
+    // const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    // console.log('[gemini] finishReason:', json.candidates?.[0]?.finishReason, 'tokens:', json.usageMetadata?.totalTokenCount);
 
     console.log('[gemini] parsed text:', JSON.stringify(text));
 
