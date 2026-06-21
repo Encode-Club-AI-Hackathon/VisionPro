@@ -91,7 +91,7 @@ class SpeechService {
   }
 
   async speakWarning(text: string): Promise<void> {
-    await this.enqueue(text, true);
+    await this.enqueue(text, false);
   }
 
   async speakNavigation(text: string): Promise<void> {

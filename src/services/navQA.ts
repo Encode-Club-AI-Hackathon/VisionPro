@@ -52,7 +52,7 @@ export async function answerNavigationQuestion(
     model,
     messages: [{ role: 'user', content: contentParts }],
     temperature: 0.3,
-    maxOutputTokens: 256,
+    maxOutputTokens: 4096,
   });
 
   console.log('[navQA] raw answer length:', answer.length, 'first 100:', answer.slice(0, 100));
